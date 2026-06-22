@@ -18,7 +18,7 @@ export default defineConfig({
   // "/slate/" = served from https://kieran1010.github.io/slate/
   // Change to "/" once slate.hypnos.one DNS is live, since a
   // custom domain always serves from the domain root.
-  base: "/slate/",
+  base: "/",
 
   plugins: [
     react(),
