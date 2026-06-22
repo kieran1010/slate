@@ -1,0 +1,81 @@
+# .github/workflows/deploy.yml
+#
+# Builds the Charted PWA and deploys it to GitHub Pages whenever
+# a commit is pushed to the main branch. Also runnable manually
+# via the "Run workflow" button in the Actions tab.
+#
+# SETUP CHECKLIST (one-time, in the repo settings):
+#   1. Settings → Pages → Source: set to "GitHub Actions"
+#   2. Settings → Pages → Custom domain: enter your subdomain
+#      (e.g. charted.hypnos.one) and tick "Enforce HTTPS"
+#   3. In your DNS provider, add a CNAME record:
+#        Name:  charted          (or whatever subdomain you choose)
+#        Value: <github-username>.github.io
+#      GitHub Pages will verify this automatically; it may take
+#      a few minutes to propagate.
+#   4. Update public/CNAME to match the subdomain you chose.
+
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  # Allow manual deploys from the Actions tab
+  workflow_dispatch:
+
+# Required for the deploy-pages action to write to GitHub Pages
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only one deployment runs at a time; in-progress runs are NOT
+# cancelled (cancel-in-progress: false) so a deploy is never
+# left half-done. A queued run will replace any waiting run.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  # ── Build ────────────────────────────────────────────────────
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          # Cache npm dependencies between runs to speed up builds
+          cache: npm
+
+      - name: Install dependencies
+        # npm ci is stricter than npm install: it installs exactly
+        # what package-lock.json specifies, which is what you want
+        # for reproducible CI builds.
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+        # Vite outputs to dist/. The build also generates the
+        # service worker (sw.js) and workbox bundle automatically.
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          # Upload the entire dist/ directory as a Pages artifact
+          path: dist
+
+  # ── Deploy ───────────────────────────────────────────────────
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
