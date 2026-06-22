@@ -15,15 +15,10 @@ import { VitePWA } from "vite-plugin-pwa";
 // https://vite.dev/config/
 export default defineConfig({
   // ── base path ────────────────────────────────────────────
-  // Where the app is served FROM on the web server.
-  //   • "/"            → served at the domain root (e.g. an app
-  //                      subdomain like charted.hypnos.one)
-  //   • "/charted/"    → served from a subfolder
-  //                      (e.g. hypnos.one/charted/)
-  // Left as "/" for now. We'll set this once hypnos.one's
-  // hosting layout is confirmed — it MUST match or the service
-  // worker and asset URLs will 404.
-  base: "/",
+  // "/slate/" = served from https://kieran1010.github.io/slate/
+  // Change to "/" once slate.hypnos.one DNS is live, since a
+  // custom domain always serves from the domain root.
+  base: "/slate/",
 
   plugins: [
     react(),
