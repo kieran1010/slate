@@ -12,7 +12,7 @@
 //   src/components/TabBar.tsx
 // ============================================================
 
-import { AlertCircle, ClipboardList, Bell, Settings } from "lucide-react";
+import { AlertCircle, ClipboardList, Bell, Archive } from "lucide-react";
 import type { Tab } from "../types/nav";
 
 interface TabBarProps {
@@ -20,13 +20,11 @@ interface TabBarProps {
   onSelect: (tab: Tab) => void;
 }
 
-// Tab definitions — icon, label, value in one place so adding a
-// tab is a one-line change here rather than scattered edits.
 const TABS: { id: Tab; label: string; Icon: React.FC<{ size: number }> }[] = [
-  { id: "acute", label: "Acute", Icon: AlertCircle },
+  { id: "acute",      label: "Acute",      Icon: AlertCircle },
   { id: "pre-assess", label: "Pre-assess", Icon: ClipboardList },
-  { id: "follow-up", label: "Follow-up", Icon: Bell },
-  { id: "settings", label: "Settings", Icon: Settings },
+  { id: "follow-up",  label: "Follow-up",  Icon: Bell },
+  { id: "archive",    label: "Archive",    Icon: Archive },
 ];
 
 export function TabBar({ active, onSelect }: TabBarProps) {

@@ -27,7 +27,7 @@
 
 import { useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
-import { ChevronLeft, Search, X, Archive } from "lucide-react";
+import { Search, X, Archive } from "lucide-react";
 import {
   listArchived,
   searchArchivedByNhi,
@@ -36,12 +36,6 @@ import {
 } from "../data/repository";
 import { formatDateTime } from "../utils/format";
 import type { ArchivedItem } from "../data/repository";
-
-interface ArchiveScreenProps {
-  goBack: () => void;
-}
-
-// ── Helpers ───────────────────────────────────────────────────
 
 // The single most useful clinical field per module — shown as the
 // italic teal summary line on each card.
@@ -70,7 +64,9 @@ const MODULE_BADGE_CLS: Record<ArchivedItem["module"], string> = {
 
 // ── Component ─────────────────────────────────────────────────
 
-export function ArchiveScreen({ goBack }: ArchiveScreenProps) {
+// ArchiveScreen takes no props — it is a top-level tab accessed
+// via the bottom nav, so there is no "back" destination.
+export function ArchiveScreen() {
   const [search, setSearch] = useState("");
 
   // Single live query that switches between browse and search
@@ -116,18 +112,7 @@ export function ArchiveScreen({ goBack }: ArchiveScreenProps) {
     <div>
       {/* ── Header ─────────────────────────────────────────── */}
       <div className="screen-header">
-        <button
-          className="btn btn-ghost"
-          onClick={goBack}
-          aria-label="Back"
-          style={{ padding: "6px 4px" }}
-        >
-          <ChevronLeft size={20} aria-hidden />
-          Back
-        </button>
         <h1 className="screen-header-title">Archive</h1>
-        {/* Spacer so title stays centred */}
-        <div style={{ minWidth: 56 }} />
       </div>
 
       {/* ── NHI search bar ─────────────────────────────────── */}

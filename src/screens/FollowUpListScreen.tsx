@@ -174,14 +174,6 @@ export function FollowUpListScreen({ navigate }: FollowUpListScreenProps) {
         })}
       </ul>
 
-      <div className="archive-link-row">
-        <button
-          className="archive-link"
-          onClick={() => navigate({ tab: "follow-up", view: "archive" })}
-        >
-          View archived follow-ups →
-        </button>
-      </div>
     </div>
   );
 }

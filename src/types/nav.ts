@@ -7,16 +7,17 @@
 // `navigate` callback and call it to move around.
 // ============================================================
 
-export type Tab = "acute" | "pre-assess" | "follow-up" | "settings";
+// Bottom-nav tabs. "settings" is no longer a tab — it lives
+// behind the gear icon in the Brand bar. "archive" is now its
+// own top-level tab (previously a sub-view within each module).
+export type Tab = "acute" | "pre-assess" | "follow-up" | "archive";
 
 export type NavState =
   | { tab: "acute"; view: "list" }
   | { tab: "acute"; view: "detail"; id: number | "new" }
-  | { tab: "acute"; view: "archive" }
   | { tab: "acute"; view: "import" }
   | { tab: "pre-assess"; view: "list" }
   | { tab: "pre-assess"; view: "detail"; id: number | "new" }
-  | { tab: "pre-assess"; view: "archive" }
   | { tab: "pre-assess"; view: "import" }
   | { tab: "follow-up"; view: "list" }
   | {
@@ -25,8 +26,8 @@ export type NavState =
       id: number | "new";
       draftSource?: { module: "ACUTE" | "PRE_ASSESSMENT"; sourceId: number };
     }
-  | { tab: "follow-up"; view: "archive" }
   | { tab: "follow-up"; view: "import" }
-  | { tab: "settings"; view: "main" };
+  // Archive is a flat list — no detail view within it.
+  | { tab: "archive"; view: "list" };
 
 export type NavigateFn = (to: NavState) => void;

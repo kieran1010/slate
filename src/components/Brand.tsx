@@ -14,16 +14,28 @@
 //   src/components/Brand.tsx
 // ============================================================
 
+import { Settings } from "lucide-react";
+
 interface BrandProps {
-  // The individual app's name (currently a placeholder for the
-  // Charted replacement — e.g. "Nexus360" in the mock).
   appName: string;
+  // Called when the user taps the gear icon to open Settings.
+  onSettingsOpen: () => void;
 }
 
-export function Brand({ appName }: BrandProps) {
+export function Brand({ appName, onSettingsOpen }: BrandProps) {
   return (
     <header className="brandbar">
-      <div className="brand-lockup" aria-label="Hypnos Medical">
+      {/* Clicking the lockup opens hypnos.one in a new tab.
+          The <a> inherits the .brand-lockup layout styles;
+          link-specific overrides (colour, underline) live in
+          index.css so they stay out of inline styles. */}
+      <a
+        href="https://hypnos.one"
+        target="_blank"
+        rel="noopener noreferrer"
+        className="brand-lockup"
+        aria-label="Hypnos Medical — visit hypnos.one"
+      >
         {/* Feather "moon" crescent — the shared Hypnos mark */}
         <svg
           className="brand-moon"
@@ -38,9 +50,17 @@ export function Brand({ appName }: BrandProps) {
           <span className="brand-hypnos">Hypnos</span>
           <span className="brand-medical">Medical</span>
         </div>
-      </div>
+      </a>
       <span className="brand-divider" aria-hidden="true" />
+      {/* flex:1 pushes the gear icon to the far right */}
       <span className="brand-app">{appName}</span>
+      <button
+        className="brand-settings-btn"
+        onClick={onSettingsOpen}
+        aria-label="Open settings"
+      >
+        <Settings size={20} aria-hidden />
+      </button>
     </header>
   );
 }

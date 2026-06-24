@@ -186,16 +186,6 @@ export function AcuteListScreen({ navigate }: AcuteListScreenProps) {
         })}
       </ul>
 
-      {/* Archive link — always visible so archived records are findable
-          even when the active list is empty */}
-      <div className="archive-link-row">
-        <button
-          className="archive-link"
-          onClick={() => navigate({ tab: "acute", view: "archive" })}
-        >
-          View archived referrals →
-        </button>
-      </div>
     </div>
   );
 }

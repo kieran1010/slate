@@ -157,14 +157,6 @@ export function PreAssessListScreen({ navigate }: PreAssessListScreenProps) {
         })}
       </ul>
 
-      <div className="archive-link-row">
-        <button
-          className="archive-link"
-          onClick={() => navigate({ tab: "pre-assess", view: "archive" })}
-        >
-          View archived assessments →
-        </button>
-      </div>
     </div>
   );
 }

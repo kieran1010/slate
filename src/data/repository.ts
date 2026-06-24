@@ -426,3 +426,100 @@ export async function saveConfig(changes: Partial<AppConfig>): Promise<void> {
   const existing = (await db.config.get(pid)) ?? { ...DEFAULT_APP_CONFIG, profileId: pid };
   await db.config.put({ ...existing, ...changes, profileId: pid });
 }
+
+// ============================================================
+// FULL-DATA QUERIES  (for export — includes archived records)
+// ============================================================
+
+export async function listAllAcute(): Promise<StoredAcute[]> {
+  const pid = await getActiveProfileId();
+  if (!pid) return [];
+  return db.acute.where("profileId").equals(pid).toArray();
+}
+
+export async function listAllPreAssess(): Promise<StoredPreAssess[]> {
+  const pid = await getActiveProfileId();
+  if (!pid) return [];
+  return db.preAssess.where("profileId").equals(pid).toArray();
+}
+
+export async function listAllFollowUp(): Promise<StoredFollowUp[]> {
+  const pid = await getActiveProfileId();
+  if (!pid) return [];
+  return db.followUp.where("profileId").equals(pid).toArray();
+}
+
+// ============================================================
+// IMPORT  (from encrypted backup — creates duplicates)
+// ============================================================
+// Inserts all records from the payload into the current profile.
+// Per design: always creates new records rather than checking for
+// conflicts — on a new device this is correct, and on an existing
+// device the user can delete any unwanted duplicates.
+//
+// profileId is overridden with the current profile's id.
+// Record ids are stripped so Dexie auto-assigns new ones
+// (avoiding PK collisions with any existing records).
+
+export interface ImportPayload {
+  version: 1;
+  exportedAt: string;
+  patients: Patient[];
+  acute: Omit<StoredAcute, "profileId" | "id">[];
+  preAssess: Omit<StoredPreAssess, "profileId" | "id">[];
+  followUp: Omit<StoredFollowUp, "profileId" | "id">[];
+}
+
+export async function importData(payload: ImportPayload): Promise<void> {
+  const pid = await requireActiveProfileId();
+  await db.transaction(
+    "rw",
+    db.patients,
+    db.acute,
+    db.preAssess,
+    db.followUp,
+    async () => {
+      // Patients: upsert — keyed on [profileId+nhi] so existing
+      // identity rows are updated rather than duplicated.
+      for (const p of payload.patients) {
+        await db.patients.put({ ...p, profileId: pid });
+      }
+      // Records: no id → Dexie assigns a fresh auto-increment PK.
+      for (const r of payload.acute) {
+        await db.acute.add({ ...r, profileId: pid });
+      }
+      for (const r of payload.preAssess) {
+        await db.preAssess.add({ ...r, profileId: pid });
+      }
+      for (const r of payload.followUp) {
+        await db.followUp.add({ ...r, profileId: pid });
+      }
+    }
+  );
+}
+
+export async function clearAllLocalData(): Promise<void> {
+  await db.transaction(
+    "rw",
+    db.acute,
+    db.preAssess,
+    db.followUp,
+    db.patients,
+    db.config,
+    db.meta,
+    db.profiles,
+    async () => {
+      await Promise.all([
+        db.acute.clear(),
+        db.preAssess.clear(),
+        db.followUp.clear(),
+        db.patients.clear(),
+        db.config.clear(),
+        db.meta.clear(),
+        db.profiles.clear(),
+      ]);
+    }
+  );
+  // Also wipe localStorage (warning banner state, etc.).
+  localStorage.clear();
+}

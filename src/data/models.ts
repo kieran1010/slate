@@ -274,37 +274,47 @@ export interface DischargeToFollowUpRequest {
 // The app's settings. On Android this mirrored a Config sheet;
 // in the PWA it will live in local storage, per profile.
 //
-// NOTE: this shape will EVOLVE for the PWA — webhookUrl and
-// googleDocId belong to the old Sheets backend and may be
-// replaced by an optional "export to Sheets" target later.
-// anthropicApiKey stays (AI features are opt-in, user-supplied
-// key, stored locally only and never sent to any server of ours).
-// Ported faithfully for now so nothing is lost; we'll revisit it
-// when we build the Settings screen.
+// anthropicApiKey is opt-in (user-supplied), stored locally only
+// and never sent to any Hypnos Medical server.
+// webhookUrl and googleDocId (old Sheets backend) have been removed.
+// Cloud sync and GDocs integration are handled separately.
 export interface AppConfig {
   clinicianName: string;
   clinicianRole: string;
-  googleDocId: string;
   defaultFollowUpHours: number;
   notificationLeadMins: number;
   anthropicApiKey: string;
-  webhookUrl: string; // stored locally only
   // Whether the user has opted into AI features (requires own API key).
   // Stored separately from the key so the key is preserved when AI is
   // temporarily disabled, and the user doesn't have to re-enter it.
   aiEnabled: boolean;
+  // Passphrase for AES-256-GCM encrypted backup / restore.
+  // Stored in Firestore so it is restored automatically when the user
+  // signs in on a new device, allowing import without needing to
+  // remember the passphrase. Security note: anyone who gains access to
+  // the user's Slate account also gains this passphrase — acceptable
+  // because patient data never leaves the device unencrypted.
+  encryptionPassphrase: string;
+  // GDocs Integration — optional, warning-gated.
+  // Stores an encrypted backup in a Google Doc the user owns.
+  gdocsEnabled: boolean;
+  // ID of the Google Doc used for backup (auto-created on first export
+  // if left blank). Stored in Firestore so it is available on any
+  // device the user signs into.
+  gdocsDocId: string;
 }
 
 // Sensible defaults, equivalent to the Kotlin default arguments.
 export const DEFAULT_APP_CONFIG: AppConfig = {
   clinicianName: "",
   clinicianRole: "Anaesthetist",
-  googleDocId: "",
   defaultFollowUpHours: 24,
   notificationLeadMins: 60,
   anthropicApiKey: "",
-  webhookUrl: "",
   aiEnabled: false,
+  encryptionPassphrase: "",
+  gdocsEnabled: false,
+  gdocsDocId: "",
 };
 
 // ============================================================

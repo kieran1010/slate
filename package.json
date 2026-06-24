@@ -12,6 +12,8 @@
   "dependencies": {
     "dexie": "^4.4.4",
     "dexie-react-hooks": "^4.4.0",
+    "firebase": "^12.15.0",
+    "jszip": "^3.10.1",
     "lucide-react": "^1.21.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6"

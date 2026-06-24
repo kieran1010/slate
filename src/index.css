@@ -64,6 +64,11 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 10px;
+  /* When rendered as an <a> tag (hypnos.one link), reset link
+     styles so it looks identical to the plain div version. */
+  text-decoration: none;
+  color: inherit;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .brand-moon {
@@ -106,7 +111,84 @@ body {
   font-weight: 500;
   font-size: 1.05rem;
   color: var(--on-navy);
+  /* Push the settings gear icon to the far right of the bar. */
+  flex: 1;
 }
+
+/* ── Settings gear icon button (in Brand bar) ──────────────── */
+
+.brand-settings-btn {
+  background: transparent;
+  border: none;
+  color: var(--on-navy);
+  cursor: pointer;
+  padding: 6px;
+  display: flex;
+  align-items: center;
+  border-radius: 6px;
+  flex-shrink: 0;
+  opacity: 0.8;
+  -webkit-tap-highlight-color: transparent;
+  transition: opacity 0.15s;
+}
+.brand-settings-btn:hover  { opacity: 1; }
+.brand-settings-btn:active { opacity: 0.6; }
+
+/* ── Settings modal overlay ────────────────────────────────── */
+/* Covers the entire viewport — Brand bar, content and TabBar —
+   so Settings feels like a full-screen page rather than a panel
+   that floats over partial UI. z-index sits above everything. */
+
+.settings-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  /* Respect iPhone home bar */
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* ── Local data warning banner ─────────────────────────────── */
+/* Sits between the Brand bar and the main content area. Shown
+   until permanently dismissed (localStorage flag). Uses a pale
+   teal tint to stay on-brand without looking alarming. */
+
+.local-data-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  background: #e8f4f6;
+  border-bottom: 1px solid #b8dce2;
+  padding: 0.65rem 1rem;
+  flex-shrink: 0;
+}
+
+.local-data-banner-text {
+  flex: 1;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: #1a4f5a;
+}
+
+.local-data-banner-dismiss {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: #3a7a88;
+  font-size: 0.8rem;
+  padding: 2px 4px;
+  flex-shrink: 0;
+  line-height: 1;
+  -webkit-tap-highlight-color: transparent;
+  opacity: 0.7;
+  transition: opacity 0.15s;
+}
+.local-data-banner-dismiss:hover  { opacity: 1; }
+.local-data-banner-dismiss:active { opacity: 0.5; }
 
 /* ============================================================
    Shared surface primitives (used by upcoming screens)
@@ -765,21 +847,178 @@ body {
 
 .btn-restore:hover { background: #d8eff2; }
 
-/* ── Archive link at bottom of list screens ──────────────────── */
+/* ── Auth UI (Settings — Account section) ────────────────────── */
 
-.archive-link-row {
-  text-align: center;
-  padding: 4px 0 20px;
+.auth-tab-row {
+  display: flex;
+  gap: 0;
+  margin-bottom: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
 }
 
-.archive-link {
-  font-size: 0.8rem;
-  color: var(--dim);
+.auth-tab {
+  flex: 1;
+  padding: 0.55rem 0.75rem;
   background: transparent;
   border: none;
   cursor: pointer;
   font-family: var(--font-body);
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--muted);
   -webkit-tap-highlight-color: transparent;
+  transition: background 0.15s, color 0.15s;
+}
+.auth-tab.active {
+  background: var(--navy);
+  color: #fff;
 }
 
-.archive-link:hover { color: var(--muted); text-decoration: underline; }
+.auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0.75rem 0;
+  color: var(--dim);
+  font-size: 0.78rem;
+}
+.auth-divider::before,
+.auth-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.auth-google-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.auth-error {
+  font-size: 0.8rem;
+  color: #c0392b;
+  margin: 0.25rem 0 0.5rem;
+}
+
+.auth-signed-in-email {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--text);
+  margin-bottom: 0.4rem;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.auth-signed-in-badge {
+  color: var(--teal);
+  font-weight: 700;
+}
+
+.auth-mgmt-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+}
+
+.auth-delete-btn {
+  color: #c0392b;
+}
+.auth-delete-btn:hover { color: #922b21; }
+
+/* Inline panel for change-password form */
+.auth-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1rem;
+  margin: 0.5rem 0;
+}
+
+.auth-panel-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  margin-top: 0.5rem;
+}
+
+/* Danger button (sign out confirm, delete confirm) */
+.btn-danger {
+  background: #c0392b;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 0.5rem 1rem;
+  font-family: var(--font-body);
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.15s;
+}
+.btn-danger:hover  { background: #a93226; }
+.btn-danger:active { background: #922b21; }
+.btn-danger:disabled { opacity: 0.6; cursor: not-allowed; }
+
+/* ── Data section (Settings) ─────────────────────────────────── */
+
+.data-action-row {
+  border-top: 1px solid var(--border);
+  padding-top: 0.75rem;
+}
+
+.data-action-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.data-action-label {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.data-action-buttons {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.35rem;
+}
+
+.data-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.82rem;
+}
+
+.data-import-ok {
+  font-size: 0.8rem;
+  color: var(--teal);
+}
+
+/* ── GDocs Integration notice ────────────────────────────────── */
+/* Shown when GDocs is enabled but the user isn't signed in with  */
+/* Google. Styled like an inline info callout.                    */
+
+.gdocs-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  background: #fef9e7;
+  border: 1px solid #f0c040;
+  border-radius: 8px;
+  padding: 0.6rem 0.75rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.8rem;
+  color: #7a5c00;
+  line-height: 1.4;
+}
