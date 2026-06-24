@@ -17,7 +17,7 @@ const LABELS: Record<Tab, string> = {
   "acute": "Acute referrals",
   "pre-assess": "Pre-assessment",
   "follow-up": "Follow-up",
-  "settings": "Settings",
+  "archive": "Archive",
 };
 
 interface PlaceholderScreenProps {

@@ -499,15 +499,11 @@ export async function importData(payload: ImportPayload): Promise<void> {
 }
 
 export async function clearAllLocalData(): Promise<void> {
+  // Use the array form of db.transaction to avoid exceeding Dexie's
+  // typed overload limit (max 7 positional arguments).
   await db.transaction(
     "rw",
-    db.acute,
-    db.preAssess,
-    db.followUp,
-    db.patients,
-    db.config,
-    db.meta,
-    db.profiles,
+    [db.acute, db.preAssess, db.followUp, db.patients, db.config, db.meta, db.profiles],
     async () => {
       await Promise.all([
         db.acute.clear(),

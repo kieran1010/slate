@@ -26,7 +26,11 @@ const VERSION_TAG = "SLATE_ENC_V1";
 
 // ── Helpers ──────────────────────────────────────────────────
 
-function bufToBase64(buf: ArrayBuffer | Uint8Array): string {
+// TypeScript 6 made Uint8Array generic (Uint8Array<TArrayBuffer>).
+// The Web Crypto API requires Uint8Array<ArrayBuffer> specifically,
+// so we annotate all buffer helpers with the concrete type.
+
+function bufToBase64(buf: ArrayBuffer | Uint8Array<ArrayBuffer>): string {
   const bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
   let binary = "";
   for (let i = 0; i < bytes.byteLength; i++) {
@@ -35,9 +39,9 @@ function bufToBase64(buf: ArrayBuffer | Uint8Array): string {
   return btoa(binary);
 }
 
-function base64ToBuf(b64: string): Uint8Array {
+function base64ToBuf(b64: string): Uint8Array<ArrayBuffer> {
   const binary = atob(b64);
-  const buf = new Uint8Array(binary.length);
+  const buf = new Uint8Array(binary.length) as Uint8Array<ArrayBuffer>;
   for (let i = 0; i < binary.length; i++) {
     buf[i] = binary.charCodeAt(i);
   }
@@ -46,7 +50,7 @@ function base64ToBuf(b64: string): Uint8Array {
 
 async function deriveKey(
   passphrase: string,
-  salt: Uint8Array
+  salt: Uint8Array<ArrayBuffer>
 ): Promise<CryptoKey> {
   const enc = new TextEncoder();
   const keyMaterial = await crypto.subtle.importKey(
@@ -81,8 +85,8 @@ export async function encryptPayload(
   plaintext: string,
   passphrase: string
 ): Promise<string> {
-  const salt = crypto.getRandomValues(new Uint8Array(16));
-  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const salt = crypto.getRandomValues(new Uint8Array(16)) as Uint8Array<ArrayBuffer>;
+  const iv = crypto.getRandomValues(new Uint8Array(12)) as Uint8Array<ArrayBuffer>;
   const key = await deriveKey(passphrase, salt);
   const enc = new TextEncoder();
   const ciphertext = await crypto.subtle.encrypt(
