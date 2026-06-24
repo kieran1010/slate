@@ -468,47 +468,13 @@ export function SettingsScreen({ onClose }: SettingsScreenProps) {
               <p className="form-hint" style={{ marginBottom: "0.75rem" }}>
                 Sign in to save your settings securely and restore them on any device.
               </p>
-              <div className="auth-tab-row">
-                <button className={`auth-tab${!isCreatingAccount ? " active" : ""}`}
-                  onClick={() => { setIsCreatingAccount(false); setAuthError(""); }}>Sign in</button>
-                <button className={`auth-tab${isCreatingAccount ? " active" : ""}`}
-                  onClick={() => { setIsCreatingAccount(true); setAuthError(""); }}>Create account</button>
-              </div>
-              <div className="form-field">
-                <label className="form-label" htmlFor="s-email">Email</label>
-                <input id="s-email" className="form-input" type="email" inputMode="email"
-                  autoComplete="email" autoCapitalize="off" value={email}
-                  onChange={(e) => { setEmail(e.target.value); setAuthError(""); }} />
-              </div>
-              <div className="form-field">
-                <label className="form-label" htmlFor="s-login-pw">Password</label>
-                <div className="apikey-row">
-                  <input id="s-login-pw" className="form-input"
-                    type={showLoginPassword ? "text" : "password"}
-                    autoComplete={isCreatingAccount ? "new-password" : "current-password"}
-                    autoCapitalize="off" value={password}
-                    onChange={(e) => { setPassword(e.target.value); setAuthError(""); }} />
-                  <button className="btn-icon-sm" type="button" onClick={() => setShowLoginPassword((v) => !v)}
-                    aria-label={showLoginPassword ? "Hide password" : "Show password"}>
-                    {showLoginPassword ? <EyeOff size={16} aria-hidden /> : <Eye size={16} aria-hidden />}
-                  </button>
-                </div>
-              </div>
-              {isCreatingAccount && (
-                <div className="form-field">
-                  <label className="form-label" htmlFor="s-login-pw2">Confirm password</label>
-                  <input id="s-login-pw2" className="form-input" type="password"
-                    autoComplete="new-password" autoCapitalize="off" value={confirmPassword}
-                    onChange={(e) => { setConfirmPassword(e.target.value); setAuthError(""); }} />
-                </div>
-              )}
-              {authError && <p className="auth-error">{authError}</p>}
-              <button className="btn btn-primary" onClick={handleEmailAuth} disabled={authWorking}
-                style={{ width: "100%", marginBottom: "0.75rem" }}>
-                {authWorking ? "Please wait…" : isCreatingAccount ? "Create account" : "Sign in"}
-              </button>
-              <div className="auth-divider"><span>or</span></div>
-              <button className="btn btn-secondary auth-google-btn" onClick={handleGoogleSignIn} disabled={authWorking}>
+
+              {/* Email/password sign-in is intentionally hidden for now.
+                  The code below is preserved for future re-enablement.
+                  Only Google sign-in is offered at present. */}
+
+              <button className="btn btn-secondary auth-google-btn"
+                onClick={handleGoogleSignIn} disabled={authWorking}>
                 <svg width="16" height="16" viewBox="0 0 48 48" aria-hidden="true">
                   <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
                   <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
@@ -517,6 +483,8 @@ export function SettingsScreen({ onClose }: SettingsScreenProps) {
                 </svg>
                 Continue with Google
               </button>
+
+              {authError && <p className="auth-error" style={{ marginTop: "0.5rem" }}>{authError}</p>}
             </div>
           )}
         </section>

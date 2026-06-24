@@ -37,7 +37,11 @@ import { signInWithPopup, GoogleAuthProvider } from "firebase/auth";
 import { firebaseAuth } from "../firebase";
 
 // ── Scope ─────────────────────────────────────────────────────
-const DRIVE_FILE_SCOPE = "https://www.googleapis.com/auth/drive.file";
+// The Google Docs API requires the `documents` scope specifically —
+// drive.file is not accepted for docs.googleapis.com endpoints.
+// Users see a "this app isn't verified" screen on first use; they
+// click Advanced → Go to Slate. Normal for private/internal tools.
+const GDOCS_SCOPE = "https://www.googleapis.com/auth/documents";
 
 // ── Token cache (module-level, session-scoped) ────────────────
 let _cachedToken: string | null = null;
@@ -86,7 +90,7 @@ export async function requestDriveToken(): Promise<string> {
   // For existing Google users Firebase often skips the popup if
   // the scope was already consented to.
   const provider = new GoogleAuthProvider();
-  provider.addScope(DRIVE_FILE_SCOPE);
+  provider.addScope(GDOCS_SCOPE);
 
   const result = await signInWithPopup(firebaseAuth, provider);
   const credential = GoogleAuthProvider.credentialFromResult(result);
@@ -107,20 +111,17 @@ export async function requestDriveToken(): Promise<string> {
 
 /**
  * Creates a new Google Doc titled "Slate Backup" using the
- * Drive v3 API. Returns the new document's ID.
- * Used on the first GDocs export when no Doc ID is configured.
+ * Docs v1 API (requires `documents` scope). Returns the new
+ * document's ID.
  */
 export async function createBackupDoc(token: string): Promise<string> {
-  const res = await fetch("https://www.googleapis.com/drive/v3/files", {
+  const res = await fetch("https://docs.googleapis.com/v1/documents", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      name: "Slate Backup",
-      mimeType: "application/vnd.google-apps.document",
-    }),
+    body: JSON.stringify({ title: "Slate Backup" }),
   });
 
   if (!res.ok) {
@@ -131,8 +132,9 @@ export async function createBackupDoc(token: string): Promise<string> {
     );
   }
 
-  const file = (await res.json()) as { id: string };
-  return file.id;
+  // Docs API returns documentId (Drive API returns id).
+  const doc = (await res.json()) as { documentId: string };
+  return doc.documentId;
 }
 
 // ── Docs API — append ─────────────────────────────────────────

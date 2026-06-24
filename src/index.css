@@ -37,11 +37,18 @@
   padding: 0;
 }
 
+html {
+  height: 100%;
+}
+
 body {
   font-family: var(--font-body);
   background: var(--surface);
   color: var(--text);
-  min-height: 100vh;
+  /* overflow:hidden prevents the page from scrolling at body level.
+     All scrolling happens inside .app-content instead. */
+  overflow: hidden;
+  height: 100%;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -216,12 +223,14 @@ body {
 /* ── App shell layout ──────────────────────────────────────── */
 
 .app-shell {
+  /* position:fixed + inset:0 is the most robust approach for mobile PWAs.
+     It anchors the shell to the visual viewport regardless of browser chrome
+     (Android URL bar, iOS home indicator, etc.), keeping the tab bar visible
+     at all times without relying on dvh/svh support. */
+  position: fixed;
+  inset: 0;
   display: flex;
   flex-direction: column;
-  /* 100dvh uses the dynamic viewport on mobile (accounts for the
-     browser chrome that slides in/out). Falls back to 100vh. */
-  height: 100dvh;
-  height: 100vh;
   overflow: hidden;
 }
 
@@ -970,8 +979,10 @@ body {
 /* ── Data section (Settings) ─────────────────────────────────── */
 
 .data-action-row {
-  border-top: 1px solid var(--border);
+  margin-top: 0.75rem;
   padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+  opacity: 0.9;
 }
 
 .data-action-group {
@@ -981,9 +992,11 @@ body {
 }
 
 .data-action-label {
-  font-size: 0.82rem;
+  font-size: 0.72rem;
   font-weight: 600;
-  color: var(--text);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 
 .data-action-buttons {
