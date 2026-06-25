@@ -19,15 +19,12 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import {
   Eye, EyeOff, AlertTriangle, Check, X,
-  LogOut, UserX, KeyRound, Download, Upload, FileDown,
+  LogOut, UserX, Download, Upload, FileDown,
 } from "lucide-react";
 import {
-  signInWithEmailAndPassword,
-  createUserWithEmailAndPassword,
   signInWithPopup,
   GoogleAuthProvider,
   signOut,
-  updatePassword,
   deleteUser,
   type User,
 } from "firebase/auth";
@@ -48,7 +45,6 @@ import {
   createBackupDoc,
   appendToGoogleDoc,
   readLatestFromGoogleDoc,
-  parseGoogleDocId,
 } from "../utils/gdocs";
 
 // ── Types ─────────────────────────────────────────────────────
@@ -66,7 +62,12 @@ interface FormState {
 }
 
 interface SettingsScreenProps {
+  // Closes the Settings panel (App balances the browser-history entry).
   onClose?: () => void;
+  // Called after a successful sign-out / account deletion, once Firebase
+  // sign-out and the local-data wipe have completed. App uses it to
+  // recreate a fresh profile and reset the UI without a page reload.
+  onSignedOut?: () => void;
 }
 
 // ── Firebase error messages ────────────────────────────────────
@@ -102,7 +103,7 @@ function firebaseErrorMessage(err: unknown): string {
 
 // ── Component ─────────────────────────────────────────────────
 
-export function SettingsScreen({ onClose }: SettingsScreenProps) {
+export function SettingsScreen({ onClose, onSignedOut }: SettingsScreenProps) {
   const { user, loading: authLoading } = useAuth();
   const existingConfig = useLiveQuery(() => getConfig(), []);
 
@@ -126,22 +127,12 @@ export function SettingsScreen({ onClose }: SettingsScreenProps) {
   const [saving, setSaving] = useState(false);
   const [toastVisible, setToastVisible] = useState(false);
 
-  // ── Auth form state ───────────────────────────────────────
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-  const [isCreatingAccount, setIsCreatingAccount] = useState(false);
-  const [showLoginPassword, setShowLoginPassword] = useState(false);
+  // ── Auth state (Google sign-in only) ──────────────────────
   const [authWorking, setAuthWorking] = useState(false);
   const [authError, setAuthError] = useState("");
 
   // ── Account management state ──────────────────────────────
   const [showSignOutConfirm, setShowSignOutConfirm] = useState(false);
-  const [showChangePassword, setShowChangePassword] = useState(false);
-  const [newPassword, setNewPassword] = useState("");
-  const [confirmNewPassword, setConfirmNewPassword] = useState("");
-  const [passwordChanging, setPasswordChanging] = useState(false);
-  const [passwordChangeError, setPasswordChangeError] = useState("");
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteWorking, setDeleteWorking] = useState(false);
 
@@ -214,12 +205,18 @@ export function SettingsScreen({ onClose }: SettingsScreenProps) {
         anthropicApiKey: form.anthropicApiKey.trim(),
         encryptionPassphrase: form.encryptionPassphrase,
         gdocsEnabled: form.gdocsEnabled,
-        gdocsDocId: parseGoogleDocId(form.gdocsDocId),
+        gdocsDocId: form.gdocsDocId.trim(),
       };
       await saveConfig(config);
       if (user) await saveRemoteSettings(user.uid, config);
       setToastVisible(true);
-      setTimeout(() => setToastVisible(false), 2000);
+      // Auto-close shortly after a successful save: the "Settings saved"
+      // toast flashes, then the panel dismisses. onClose (App.closeSettings)
+      // also balances the browser-history entry pushed when Settings opened.
+      setTimeout(() => {
+        setToastVisible(false);
+        onClose?.();
+      }, 900);
     } catch (err) {
       console.error("Settings save failed:", err);
       alert("Save failed — please try again.");
@@ -228,23 +225,7 @@ export function SettingsScreen({ onClose }: SettingsScreenProps) {
     }
   }
 
-  // ── Email auth ────────────────────────────────────────────
-  async function handleEmailAuth() {
-    if (!email.trim() || !password) { setAuthError("Please enter your email and password."); return; }
-    if (isCreatingAccount && password !== confirmPassword) { setAuthError("Passwords do not match."); return; }
-    setAuthWorking(true); setAuthError("");
-    try {
-      if (isCreatingAccount) {
-        await createUserWithEmailAndPassword(firebaseAuth, email.trim(), password);
-      } else {
-        await signInWithEmailAndPassword(firebaseAuth, email.trim(), password);
-      }
-      hasSyncedRef.current = false;
-      setEmail(""); setPassword(""); setConfirmPassword(""); setIsCreatingAccount(false);
-    } catch (err) { setAuthError(firebaseErrorMessage(err)); }
-    finally { setAuthWorking(false); }
-  }
-
+  // ── Google sign-in (the only sign-in method) ──────────────
   async function handleGoogleSignIn() {
     setAuthWorking(true); setAuthError("");
     try {
@@ -256,30 +237,28 @@ export function SettingsScreen({ onClose }: SettingsScreenProps) {
 
   async function handleSignOut() {
     try {
-      await clearAllLocalData();
+      // Sign out of Firebase FIRST, so the session definitely ends even if
+      // the local wipe below were to fail. Then clear all on-device data,
+      // then hand off to App (onSignedOut) to recreate a fresh profile and
+      // reset the UI. No window.location.reload() — that reload is what
+      // produced the blank-screen-needing-refresh behaviour.
       await signOut(firebaseAuth);
-      window.location.reload();
-    } catch (err) { console.error(err); alert("Sign out failed. Please try again."); }
-  }
-
-  async function handleChangePassword() {
-    if (newPassword.length < 6) { setPasswordChangeError("Password must be at least 6 characters."); return; }
-    if (newPassword !== confirmNewPassword) { setPasswordChangeError("Passwords do not match."); return; }
-    if (!firebaseAuth.currentUser) return;
-    setPasswordChanging(true); setPasswordChangeError("");
-    try {
-      await updatePassword(firebaseAuth.currentUser, newPassword);
-      setShowChangePassword(false); setNewPassword(""); setConfirmNewPassword("");
-    } catch (err) { setPasswordChangeError(firebaseErrorMessage(err)); }
-    finally { setPasswordChanging(false); }
+      await clearAllLocalData();
+      onSignedOut?.();
+    } catch (err) {
+      console.error(err);
+      alert("Sign out failed. Please try again.");
+    }
   }
 
   async function handleDeleteAccount(currentUser: User) {
     setDeleteWorking(true);
     try {
-      await clearAllLocalData();
+      // Delete the Firebase account first (also ends the session), then
+      // wipe local data, then let App re-init reactively.
       await deleteUser(currentUser);
-      window.location.reload();
+      await clearAllLocalData();
+      onSignedOut?.();
     } catch (err) {
       setDeleteWorking(false); setShowDeleteConfirm(false);
       alert(firebaseErrorMessage(err));
@@ -325,11 +304,13 @@ export function SettingsScreen({ onClose }: SettingsScreenProps) {
     try {
       const token = await requestDriveToken();
 
-      // Auto-create the backup Doc if no ID is configured yet.
-      let docId = parseGoogleDocId(form.gdocsDocId);
+      // Use the silently-stored backup Doc, or auto-create one the very
+      // first time. Slate keeps exactly one "Slate Backup" Doc per Google
+      // account; its ID lives in settings and syncs across devices.
+      let docId = form.gdocsDocId.trim();
       if (!docId) {
         docId = await createBackupDoc(token);
-        // Save the new Doc ID to settings immediately.
+        // Persist the new Doc ID immediately (locally + to the account).
         set("gdocsDocId", docId);
         await saveConfig({ gdocsDocId: docId });
         if (user) await saveRemoteSettings(user.uid, { ...form, gdocsDocId: docId });
@@ -344,8 +325,13 @@ export function SettingsScreen({ onClose }: SettingsScreenProps) {
   }
 
   async function handleGdocsImport() {
-    const docId = parseGoogleDocId(form.gdocsDocId);
-    if (!docId) { alert("Please enter a Google Doc ID first."); return; }
+    // The Doc ID is managed silently (stored on first backup, synced across
+    // devices via your account). No manual entry.
+    const docId = form.gdocsDocId.trim();
+    if (!docId) {
+      setGdocsResult({ ok: false, message: "No cloud backup found yet — back up first." });
+      return;
+    }
     if (!form.encryptionPassphrase.trim()) { alert("Please enter your encryption passphrase first."); return; }
     setGdocsImporting(true); setGdocsResult(null);
     try {
@@ -359,7 +345,6 @@ export function SettingsScreen({ onClose }: SettingsScreenProps) {
   }
 
   // ── Derived ───────────────────────────────────────────────
-  const isEmailProvider = user?.providerData.some((p) => p.providerId === "password") ?? false;
   const isGoogleUser = user?.providerData.some((p) => p.providerId === "google.com") ?? false;
   const gdocsBusy = gdocsExporting || gdocsImporting;
 
@@ -387,7 +372,7 @@ export function SettingsScreen({ onClose }: SettingsScreenProps) {
           {authLoading ? (
             <p className="form-hint">Loading…</p>
           ) : user ? (
-            <div>
+            <div className="form-section-body">
               <p className="auth-signed-in-email">
                 <span className="auth-signed-in-badge">✓</span>{user.email ?? "Signed in"}
               </p>
@@ -395,37 +380,8 @@ export function SettingsScreen({ onClose }: SettingsScreenProps) {
                 Settings are synced to your account and restored on any device you sign in to.
               </p>
 
-              {isEmailProvider && !showChangePassword && !showSignOutConfirm && !showDeleteConfirm && (
+              {!showSignOutConfirm && !showDeleteConfirm && (
                 <button className="btn btn-secondary auth-mgmt-btn"
-                  onClick={() => { setShowChangePassword(true); setPasswordChangeError(""); setNewPassword(""); setConfirmNewPassword(""); }}>
-                  <KeyRound size={14} aria-hidden /> Change password
-                </button>
-              )}
-
-              {showChangePassword && (
-                <div className="auth-panel">
-                  <div className="form-field">
-                    <label className="form-label" htmlFor="s-newpw">New password</label>
-                    <input id="s-newpw" className="form-input" type="password" value={newPassword}
-                      onChange={(e) => setNewPassword(e.target.value)} autoComplete="new-password" autoCapitalize="off" />
-                  </div>
-                  <div className="form-field">
-                    <label className="form-label" htmlFor="s-newpw2">Confirm new password</label>
-                    <input id="s-newpw2" className="form-input" type="password" value={confirmNewPassword}
-                      onChange={(e) => setConfirmNewPassword(e.target.value)} autoComplete="new-password" autoCapitalize="off" />
-                  </div>
-                  {passwordChangeError && <p className="auth-error">{passwordChangeError}</p>}
-                  <div className="auth-panel-actions">
-                    <button className="btn btn-ghost" onClick={() => setShowChangePassword(false)}>Cancel</button>
-                    <button className="btn btn-primary" onClick={handleChangePassword} disabled={passwordChanging}>
-                      {passwordChanging ? "Saving…" : "Save new password"}
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {!showSignOutConfirm && !showDeleteConfirm && !showChangePassword && (
-                <button className="btn btn-secondary auth-mgmt-btn" style={{ marginTop: "0.5rem" }}
                   onClick={() => setShowSignOutConfirm(true)}>
                   <LogOut size={14} aria-hidden /> Sign out
                 </button>
@@ -443,7 +399,7 @@ export function SettingsScreen({ onClose }: SettingsScreenProps) {
                 </div>
               )}
 
-              {!showSignOutConfirm && !showDeleteConfirm && !showChangePassword && (
+              {!showSignOutConfirm && !showDeleteConfirm && (
                 <button className="btn btn-ghost auth-mgmt-btn auth-delete-btn" style={{ marginTop: "0.25rem" }}
                   onClick={() => setShowDeleteConfirm(true)}>
                   <UserX size={14} aria-hidden /> Delete account
@@ -464,14 +420,16 @@ export function SettingsScreen({ onClose }: SettingsScreenProps) {
               )}
             </div>
           ) : (
-            <div>
+            // Signed-out branch. Wrapped in .form-section-body so the hint text
+            // and the Google button get the same 16px horizontal inset as the
+            // signed-in branch and the Profile fields below — keeping the whole
+            // form left-aligned to one consistent edge.
+            <div className="form-section-body">
               <p className="form-hint" style={{ marginBottom: "0.75rem" }}>
                 Sign in to save your settings securely and restore them on any device.
               </p>
 
-              {/* Email/password sign-in is intentionally hidden for now.
-                  The code below is preserved for future re-enablement.
-                  Only Google sign-in is offered at present. */}
+              {/* Google is the only sign-in method offered. */}
 
               <button className="btn btn-secondary auth-google-btn"
                 onClick={handleGoogleSignIn} disabled={authWorking}>
@@ -569,10 +527,17 @@ export function SettingsScreen({ onClose }: SettingsScreenProps) {
           )}
         </section>
 
-        {/* ── Data ─────────────────────────────────────── */}
-        <section className="form-section" aria-label="Data">
-          <div className="form-section-title">Data</div>
+        {/* ── Encrypted Backup ─────────────────────────── */}
+        {/* One unified section. The passphrase and the on-device file
+            backup are ALWAYS visible. The Google Drive cloud backup is
+            concealed behind a toggle (warning-gated). There is no manual
+            Doc ID: Slate creates and reuses a single private "Slate Backup"
+            Google Doc per account, storing its ID silently in settings
+            (which sync across devices). */}
+        <section className="form-section" aria-label="Encrypted backup">
+          <div className="form-section-title">Encrypted Backup</div>
 
+          {/* Passphrase — used to encrypt BOTH the file and cloud backups */}
           <div className="form-field">
             <label className="form-label" htmlFor="s-passphrase">Encryption passphrase</label>
             <div className="apikey-row">
@@ -588,15 +553,16 @@ export function SettingsScreen({ onClose }: SettingsScreenProps) {
               </button>
             </div>
             <span className="form-hint">
-              Used to encrypt and decrypt your data backup. Stored in your Slate account so it is
-              restored automatically on any device you sign in to.
+              Encrypts and decrypts every backup below — both the file and the cloud copy. Stored in
+              your Slate account so it is restored automatically on any device you sign in to.
             </span>
           </div>
 
+          {/* File backup — always available, no account required */}
           <div className="data-action-row">
             <div className="data-action-group">
-              <p className="data-action-label">Encrypted backup</p>
-              <p className="form-hint">Export all patient data as an encrypted file. Import to restore on a new device or browser.</p>
+              <p className="data-action-label">Backup file</p>
+              <p className="form-hint">Export all patient data as an encrypted file. Import it to restore on a new device or browser.</p>
               <div className="data-action-buttons">
                 <button className="btn btn-secondary data-btn" onClick={handleExportEncrypted} disabled={exporting || importing}>
                   <Download size={14} aria-hidden />{exporting ? "Exporting…" : "Export backup"}
@@ -616,31 +582,18 @@ export function SettingsScreen({ onClose }: SettingsScreenProps) {
             </div>
           </div>
 
-          <div className="data-action-row" style={{ marginTop: "0.75rem" }}>
-            <div className="data-action-group">
-              <p className="data-action-label">CSV export</p>
-              <p className="form-hint">Export all records (including archived) as three CSV files in a zip. Suitable for spreadsheets. No CSV import.</p>
-              <button className="btn btn-secondary data-btn" onClick={handleExportCsv} disabled={exportingCsv}>
-                <FileDown size={14} aria-hidden />{exportingCsv ? "Exporting…" : "Export CSV"}
-              </button>
-            </div>
-          </div>
-        </section>
-
-        {/* ── GDocs Integration ─────────────────────────── */}
-        <section className="form-section" aria-label="GDocs integration">
-          <div className="form-section-title">GDocs Integration</div>
-
-          <div className="form-field">
+          {/* Cloud backup toggle — conceals the Google Drive options below.
+              A top border separates it from the file backup above. */}
+          <div className="form-field" style={{ borderTop: "1px solid var(--border)", paddingTop: "0.85rem", marginTop: "0.5rem" }}>
             <div className="toggle-row">
               <span className="toggle-label">
-                Enable GDocs Integration
+                Back up to Google Drive
                 <span className="toggle-label-sub">
-                  Stores an encrypted backup in a Google Doc you own
+                  Appends an encrypted copy to a private “Slate Backup” Google Doc
                 </span>
               </span>
               <button className="toggle-track" role="switch" aria-checked={form.gdocsEnabled}
-                aria-label="Enable GDocs Integration"
+                aria-label="Back up to Google Drive"
                 onClick={() => {
                   if (form.gdocsEnabled) { set("gdocsEnabled", false); }
                   else { setShowGdocsWarning(true); }
@@ -654,21 +607,17 @@ export function SettingsScreen({ onClose }: SettingsScreenProps) {
             <div className="ai-warning" role="alert" aria-live="polite">
               <p className="ai-warning-title"><AlertTriangle size={16} aria-hidden /> Privacy notice</p>
               <p>
-                This integration writes an <strong>encrypted</strong> copy of your patient data to a
-                Google Doc stored in your own Google Drive. Your data is encrypted with your passphrase
-                before leaving this app — Google cannot read it.
+                This writes an <strong>encrypted</strong> copy of your patient data to a Google Doc in your
+                own Google Drive. Your data is encrypted with your passphrase before it leaves this app —
+                Google cannot read it.
               </p>
               <p>
-                Enabling this requires a <strong>Google account</strong> and grants Slate read/write
-                access to a specific Google Doc. No other files in your Drive are accessed.
+                Slate creates a single private <strong>“Slate Backup”</strong> document the first time you
+                back up, and only ever touches that one document. No other files in your Drive are accessed.
               </p>
               <p>
-                This is an optional convenience feature for cross-device restore. Backups are appended
-                to the Doc (never overwritten) so previous exports are preserved.
-              </p>
-              <p>
-                <strong>Note:</strong> GDocs Integration requires signing in with Google. Email/password
-                users will need to switch to Google sign-in to use this feature.
+                Backups are appended, never overwritten, so previous exports are preserved. This feature
+                requires signing in with Google.
               </p>
               <div className="ai-warning-actions">
                 <button className="btn btn-secondary" onClick={() => setShowGdocsWarning(false)}>Cancel</button>
@@ -681,63 +630,69 @@ export function SettingsScreen({ onClose }: SettingsScreenProps) {
 
           {form.gdocsEnabled && !showGdocsWarning && (
             <div>
-              {/* Warning for non-Google users */}
-              {user && !isGoogleUser && (
+              {/* Cloud backup needs a Google-authenticated session for Drive access */}
+              {!isGoogleUser && (
                 <div className="gdocs-notice" role="status">
                   <AlertTriangle size={14} aria-hidden />
                   <span>
-                    GDocs Integration requires Google sign-in. Sign out and use
-                    "Continue with Google" to enable this feature.
+                    {user
+                      ? "Cloud backup needs Google sign-in. Sign out and choose “Continue with Google” to use it."
+                      : "Sign in with Google (in the Account section above) to use cloud backup."}
                   </span>
                 </div>
               )}
 
-              {!user && (
-                <div className="gdocs-notice" role="status">
-                  <AlertTriangle size={14} aria-hidden />
-                  <span>Please sign in with Google to use GDocs Integration.</span>
+              {isGoogleUser && (
+                <div className="data-action-row" style={{ marginTop: 0, borderTop: "none" }}>
+                  <div className="data-action-group">
+                    <p className="data-action-label">Google Drive backup</p>
+                    <p className="form-hint">
+                      Slate manages the backup document automatically — there is nothing to configure.
+                    </p>
+                    <div className="data-action-buttons">
+                      <button className="btn btn-secondary data-btn"
+                        onClick={handleGdocsExport} disabled={gdocsBusy}>
+                        <Download size={14} aria-hidden />
+                        {gdocsExporting ? "Backing up…" : "Back up now"}
+                      </button>
+                      <button className="btn btn-secondary data-btn"
+                        onClick={handleGdocsImport} disabled={gdocsBusy || !form.gdocsDocId.trim()}>
+                        <Upload size={14} aria-hidden />
+                        {gdocsImporting ? "Restoring…" : "Restore from Drive"}
+                      </button>
+                    </div>
+                    {!form.gdocsDocId.trim() && (
+                      <p className="form-hint" style={{ marginTop: "0.4rem" }}>
+                        Restore becomes available after your first backup.
+                      </p>
+                    )}
+                    {gdocsResult && (
+                      <p className={gdocsResult.ok ? "data-import-ok" : "auth-error"} style={{ marginTop: "0.5rem" }}>
+                        {gdocsResult.message}
+                      </p>
+                    )}
+                  </div>
                 </div>
-              )}
-
-              {/* Doc ID field */}
-              <div className="form-field">
-                <label className="form-label" htmlFor="s-gdocs-docid">
-                  Google Doc ID or URL
-                </label>
-                <input id="s-gdocs-docid" className="form-input" type="text"
-                  placeholder="Leave blank to auto-create on first export"
-                  value={form.gdocsDocId}
-                  onChange={(e) => set("gdocsDocId", e.target.value)}
-                  autoCorrect="off" autoCapitalize="off" spellCheck={false} />
-                <span className="form-hint">
-                  Leave blank — Slate will create a "Slate Backup" Google Doc automatically on
-                  first export. Or paste a URL / ID of an existing Slate-created Doc.
-                </span>
-              </div>
-
-              {/* Export / Import buttons */}
-              {(user && isGoogleUser) && (
-                <div className="data-action-buttons" style={{ marginTop: "0.5rem" }}>
-                  <button className="btn btn-secondary data-btn"
-                    onClick={handleGdocsExport} disabled={gdocsBusy}>
-                    <Download size={14} aria-hidden />
-                    {gdocsExporting ? "Exporting…" : "Export to Google Doc"}
-                  </button>
-                  <button className="btn btn-secondary data-btn"
-                    onClick={handleGdocsImport} disabled={gdocsBusy || !form.gdocsDocId.trim()}>
-                    <Upload size={14} aria-hidden />
-                    {gdocsImporting ? "Importing…" : "Import from Google Doc"}
-                  </button>
-                </div>
-              )}
-
-              {gdocsResult && (
-                <p className={gdocsResult.ok ? "data-import-ok" : "auth-error"} style={{ marginTop: "0.5rem" }}>
-                  {gdocsResult.message}
-                </p>
               )}
             </div>
           )}
+        </section>
+
+        {/* ── CSV Export ──────────────────────────────── */}
+        {/* Kept SEPARATE from Encrypted Backup on purpose: CSV is plain-text
+            patient data for spreadsheets and is NOT encrypted. */}
+        <section className="form-section" aria-label="CSV export">
+          <div className="form-section-title">CSV Export</div>
+          <div className="form-section-body">
+            <p className="data-action-label">Export CSV (unencrypted)</p>
+            <p className="form-hint">
+              Export all records (including archived) as three CSV files in a zip, suitable for
+              spreadsheets. This file is <strong>not encrypted</strong>. There is no CSV import.
+            </p>
+            <button className="btn btn-secondary data-btn" onClick={handleExportCsv} disabled={exportingCsv}>
+              <FileDown size={14} aria-hidden />{exportingCsv ? "Exporting…" : "Export CSV"}
+            </button>
+          </div>
         </section>
 
       </div>

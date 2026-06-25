@@ -223,12 +223,25 @@ body {
 /* ── App shell layout ──────────────────────────────────────── */
 
 .app-shell {
-  /* position:fixed + inset:0 is the most robust approach for mobile PWAs.
-     It anchors the shell to the visual viewport regardless of browser chrome
-     (Android URL bar, iOS home indicator, etc.), keeping the tab bar visible
-     at all times without relying on dvh/svh support. */
-  position: fixed;
-  inset: 0;
+  /* VIEWPORT SIZING — the tab-bar-clipping fix.
+
+     Previously this used position:fixed + inset:0. The problem: inset:0
+     resolves against the *layout* viewport, which on Android Chrome (in a
+     browser tab) stays tall even while the bottom URL/nav chrome is shown — so
+     the shell extended *behind* that chrome and the bottom TabBar got clipped.
+     A refresh re-shows the chrome, which is exactly why the bar reappeared
+     hidden after reload but looked fine on first paint.
+
+     The fix is to size the shell with the dynamic viewport unit `dvh`. 100dvh
+     always equals the *currently visible* viewport height and updates live as
+     the browser chrome shows/hides — so the TabBar sits just above the chrome
+     rather than behind it. The plain `vh` line is a fallback for any engine
+     without dvh support; it is harmlessly overridden by the dvh line wherever
+     dvh is understood (which includes the Fold 7's Chrome). Normal document
+     flow (no position:fixed) keeps this simple; body{overflow:hidden} still
+     prevents page-level scroll. */
+  height: 100vh;   /* fallback for engines without dvh */
+  height: 100dvh;  /* dynamic — tracks Android/iOS browser chrome */
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -415,6 +428,14 @@ body {
   padding: 10px 16px 8px;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
+}
+
+/* Loose (non-field) content placed directly inside a .form-section — e.g. the
+   Account section's signed-in/signed-out blocks. Gives it the same 16px
+   horizontal inset that .form-field uses, so section bodies line up with the
+   input fields in other sections (fixes the Account left-alignment step). */
+.form-section-body {
+  padding: 12px 16px;
 }
 
 .form-field {
@@ -980,7 +1001,10 @@ body {
 
 .data-action-row {
   margin-top: 0.75rem;
-  padding-top: 0.75rem;
+  /* Match the 16px horizontal inset that .form-field uses, so these blocks
+     line up with the fields in the rest of the form instead of sitting flush
+     against the card's left edge. */
+  padding: 0.75rem 16px 0;
   border-top: 1px solid var(--border);
   opacity: 0.9;
 }

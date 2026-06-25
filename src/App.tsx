@@ -1,16 +1,24 @@
 // ============================================================
 // Charted PWA — App.tsx
 // ============================================================
-// The root component. Owns four responsibilities:
+// The root component. Owns these responsibilities:
 //
-//   1. PROFILE GATE — runs ensureActiveProfile() on startup.
+//   1. PROFILE GATE — runs ensureActiveProfile() on startup, and
+//      again after sign-out (which wipes the profiles table).
 //   2. NAVIGATION STATE — a NavState value + history stack for
-//      in-app back-button support (Android hardware back key).
+//      in-app back-button support (Android hardware back key),
+//      including the Settings panel.
 //   3. SWIPE GESTURES — horizontal swipe on the content area
 //      switches between the four main tabs (list views only).
 //   4. LAYOUT SHELL — Brand bar (top, with ⚙ settings trigger)
 //      + content area + TabBar (bottom). Settings renders as a
 //      full-screen modal overlay above the shell.
+//
+// BACK-BUTTON SEMANTICS (this build):
+//   • From a LIST view              → exits the app (browser default).
+//   • From a DETAIL view            → back to that tab's list.
+//   • From SETTINGS (open)          → closes Settings, revealing the
+//                                     screen behind it (never exits).
 // ============================================================
 
 import { useState, useEffect, useRef, useCallback } from "react";
@@ -81,13 +89,17 @@ export default function App() {
   // so the popstate event fires when the hardware back key is pressed.
   const navHistoryRef = useRef<NavState[]>([]);
 
-  // Set to true before calling window.history.back() from the
-  // in-app back button so the resulting popstate event is ignored
-  // (we've already navigated — no need to do it again).
+  // Set to true before calling window.history.back() ourselves so the
+  // resulting popstate event is ignored (we've already updated state —
+  // no need to act on it again).
   const suppressNextPopState = useRef(false);
 
   // ── Settings modal ─────────────────────────────────────────
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Ref mirror of settingsOpen so the once-mounted popstate listener
+  // (which closes over the initial value) can read the current state.
+  const settingsOpenRef = useRef(false);
+  useEffect(() => { settingsOpenRef.current = settingsOpen; }, [settingsOpen]);
 
   // ── Local data warning banner ──────────────────────────────
   // Shown until the user dismisses it; dismissal is stored in
@@ -116,22 +128,30 @@ export default function App() {
 
     const handlePopState = () => {
       // Suppress if this popstate was triggered by our own
-      // window.history.back() call in goBack().
+      // window.history.back() call (goBack / closeSettings).
       if (suppressNextPopState.current) {
         suppressNextPopState.current = false;
         return;
       }
 
+      // PRIORITY 1 — Settings open: hardware-back closes it and
+      // reveals whatever screen is behind, instead of navigating or
+      // exiting. The history entry pushed when Settings opened has
+      // already been consumed by THIS popstate, so we just flip state.
+      if (settingsOpenRef.current) {
+        setSettingsOpen(false);
+        return;
+      }
+
+      // PRIORITY 2 — In-app detail history: step back one screen.
       if (navHistoryRef.current.length > 0) {
-        // Navigate back within the app.
         const prev = navHistoryRef.current[navHistoryRef.current.length - 1];
         navHistoryRef.current = navHistoryRef.current.slice(0, -1);
         setNav(prev);
 
-        // If there is still more in-app history, push another
-        // browser state entry so the NEXT back press is also
-        // intercepted. If not, don't push — letting the next
-        // back press exit the PWA naturally.
+        // If there is still more in-app history, push another browser
+        // state entry so the NEXT back press is also intercepted. If
+        // not, don't push — letting the next back press exit the PWA.
         if (navHistoryRef.current.length > 0) {
           window.history.pushState(
             { slateNav: true, depth: navHistoryRef.current.length },
@@ -139,8 +159,8 @@ export default function App() {
           );
         }
       }
-      // If history is empty, let the browser handle the event
-      // (which exits the PWA on Android).
+      // PRIORITY 3 — Nothing to go back to (a list view): let the
+      // browser handle the event, which exits the PWA on Android.
     };
 
     window.addEventListener("popstate", handlePopState);
@@ -178,8 +198,6 @@ export default function App() {
       window.history.back();
     } else {
       // Fallback: return to the list of the current tab.
-      // (Should not normally be reached since goBack is only shown
-      // in detail screens, which always have history.)
       const { tab } = navRef.current;
       if (tab !== "archive") {
         setNav({ tab, view: "list" });
@@ -193,6 +211,47 @@ export default function App() {
     navHistoryRef.current = [];
     setNav({ tab, view: "list" } as NavState);
   }, []);
+
+  // ── Settings open / close ──────────────────────────────────
+
+  // Opening Settings pushes a browser history entry so the Android
+  // hardware back key closes the panel (handled in popstate above)
+  // rather than navigating away or exiting the app.
+  const openSettings = useCallback(() => {
+    setSettingsOpen(true);
+    window.history.pushState({ slateNav: true, settings: true }, "");
+  }, []);
+
+  // Closing Settings from within the app (the ✕ button, the auto-close
+  // after Save, or after sign-out) pops the entry we pushed on open so
+  // browser history stays balanced. suppressNextPopState stops that
+  // synthetic popstate from being treated as a back navigation.
+  const closeSettings = useCallback(() => {
+    if (settingsOpenRef.current) {
+      suppressNextPopState.current = true;
+      window.history.back();
+    }
+    setSettingsOpen(false);
+  }, []);
+
+  // ── Reactive sign-out / account-deletion re-init ───────────
+  // Called by SettingsScreen AFTER it has signed out of Firebase and
+  // cleared all local data (including the profiles table). Because the
+  // profile is gone, we recreate a fresh one, reset navigation to the
+  // default tab, and close Settings — all via React state, with NO
+  // window.location.reload(). The previous reload approach is what
+  // produced the blank-screen-needing-refresh behaviour.
+  const handleSignedOut = useCallback(async () => {
+    navHistoryRef.current = [];
+    setNav({ tab: "acute", view: "list" });
+    closeSettings();
+    try {
+      const fresh = await ensureActiveProfile();
+      setProfile(fresh);
+    } catch (err) {
+      console.error("Re-init after sign-out failed:", err);
+    }
+  }, [closeSettings]);
 
   // ── Swipe-to-switch-tab ────────────────────────────────────
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
@@ -276,7 +335,7 @@ export default function App() {
   if (!profile) {
     return (
       <div className="app-shell">
-        <Brand appName={APP_NAME} onSettingsOpen={() => setSettingsOpen(true)} />
+        <Brand appName={APP_NAME} onSettingsOpen={openSettings} />
         {!bannerDismissed && (
           <LocalDataBanner onDismiss={dismissBanner} />
         )}
@@ -290,7 +349,7 @@ export default function App() {
   // ── Main shell ─────────────────────────────────────────────
   return (
     <div className="app-shell">
-      <Brand appName={APP_NAME} onSettingsOpen={() => setSettingsOpen(true)} />
+      <Brand appName={APP_NAME} onSettingsOpen={openSettings} />
 
       {/* Local data warning — shown until permanently dismissed */}
       {!bannerDismissed && (
@@ -319,7 +378,7 @@ export default function App() {
           aria-modal="true"
           aria-label="Settings"
         >
-          <SettingsScreen onClose={() => setSettingsOpen(false)} />
+          <SettingsScreen onClose={closeSettings} onSignedOut={handleSignedOut} />
         </div>
       )}
     </div>
