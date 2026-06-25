@@ -145,6 +145,13 @@ export function SettingsScreen({ onClose, onSignedOut }: SettingsScreenProps) {
   } | null>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
 
+  // Two-step import warning: the user must confirm before we wipe
+  // clinical data. For file import, we hold the chosen File object
+  // here so we can use it after confirmation without re-opening the
+  // picker. For GDocs restore the same confirm state is reused.
+  const [showImportConfirm, setShowImportConfirm] = useState<"file" | "gdocs" | null>(null);
+  const pendingImportFileRef = useRef<File | null>(null);
+
   // ── GDocs state ───────────────────────────────────────────
   const [gdocsExporting, setGdocsExporting] = useState(false);
   const [gdocsImporting, setGdocsImporting] = useState(false);
@@ -274,19 +281,52 @@ export function SettingsScreen({ onClose, onSignedOut }: SettingsScreenProps) {
     finally { setExporting(false); }
   }
 
-  async function handleImportFile(e: React.ChangeEvent<HTMLInputElement>) {
+  // Stage the chosen file and show the replace-warning dialog.
+  // The actual import runs in confirmImport() after the user confirms.
+  function handleImportFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (!form.encryptionPassphrase.trim()) { alert("Please enter your encryption passphrase first."); return; }
-    setImporting(true); setImportResult(null);
-    try {
-      const c = await importEncrypted(file, form.encryptionPassphrase);
-      setImportResult({ ok: true, message: `Imported ${c.acute} acute, ${c.preAssess} pre-assessments, ${c.followUp} follow-ups.` });
-    } catch (err) {
-      setImportResult({ ok: false, message: err instanceof Error ? err.message : "Import failed." });
-    } finally {
-      setImporting(false);
+    if (!form.encryptionPassphrase.trim()) {
+      alert("Please enter your encryption passphrase first.");
       if (importInputRef.current) importInputRef.current.value = "";
+      return;
+    }
+    pendingImportFileRef.current = file;
+    if (importInputRef.current) importInputRef.current.value = "";
+    setImportResult(null);
+    setShowImportConfirm("file");
+  }
+
+  // Called after the user confirms the replace warning for either
+  // file or GDocs import.
+  async function confirmImport() {
+    const kind = showImportConfirm;
+    setShowImportConfirm(null);
+
+    if (kind === "file") {
+      const file = pendingImportFileRef.current;
+      pendingImportFileRef.current = null;
+      if (!file) return;
+      setImporting(true); setImportResult(null);
+      try {
+        const c = await importEncrypted(file, form.encryptionPassphrase);
+        setImportResult({ ok: true, message: `Replaced with ${c.acute} acute, ${c.preAssess} pre-assessments, ${c.followUp} follow-ups.` });
+      } catch (err) {
+        setImportResult({ ok: false, message: err instanceof Error ? err.message : "Import failed." });
+      } finally { setImporting(false); }
+
+    } else if (kind === "gdocs") {
+      const docId = form.gdocsDocId.trim();
+      if (!docId) return;
+      setGdocsImporting(true); setGdocsResult(null);
+      try {
+        const token = await requestDriveToken();
+        const encryptedText = await readLatestFromGoogleDoc(docId, token);
+        const c = await importFromEncryptedString(encryptedText, form.encryptionPassphrase);
+        setGdocsResult({ ok: true, message: `Replaced with ${c.acute} acute, ${c.preAssess} pre-assessments, ${c.followUp} follow-ups.` });
+      } catch (err) {
+        setGdocsResult({ ok: false, message: err instanceof Error ? err.message : "Restore failed." });
+      } finally { setGdocsImporting(false); }
     }
   }
 
@@ -318,13 +358,13 @@ export function SettingsScreen({ onClose, onSignedOut }: SettingsScreenProps) {
 
       const encrypted = await buildEncryptedPayload(form.encryptionPassphrase);
       await appendToGoogleDoc(docId, encrypted, token);
-      setGdocsResult({ ok: true, message: "Backup appended to Google Doc successfully." });
+      setGdocsResult({ ok: true, message: "Backed up to Google Drive successfully." });
     } catch (err) {
       setGdocsResult({ ok: false, message: err instanceof Error ? err.message : "Export failed." });
     } finally { setGdocsExporting(false); }
   }
 
-  async function handleGdocsImport() {
+  function handleGdocsImport() {
     // The Doc ID is managed silently (stored on first backup, synced across
     // devices via your account). No manual entry.
     const docId = form.gdocsDocId.trim();
@@ -333,15 +373,8 @@ export function SettingsScreen({ onClose, onSignedOut }: SettingsScreenProps) {
       return;
     }
     if (!form.encryptionPassphrase.trim()) { alert("Please enter your encryption passphrase first."); return; }
-    setGdocsImporting(true); setGdocsResult(null);
-    try {
-      const token = await requestDriveToken();
-      const encryptedText = await readLatestFromGoogleDoc(docId, token);
-      const c = await importFromEncryptedString(encryptedText, form.encryptionPassphrase);
-      setGdocsResult({ ok: true, message: `Imported ${c.acute} acute, ${c.preAssess} pre-assessments, ${c.followUp} follow-ups.` });
-    } catch (err) {
-      setGdocsResult({ ok: false, message: err instanceof Error ? err.message : "Import failed." });
-    } finally { setGdocsImporting(false); }
+    setGdocsResult(null);
+    setShowImportConfirm("gdocs");
   }
 
   // ── Derived ───────────────────────────────────────────────
@@ -469,13 +502,13 @@ export function SettingsScreen({ onClose, onSignedOut }: SettingsScreenProps) {
             <label className="form-label" htmlFor="s-fuHours">Default follow-up period (hours)</label>
             <input id="s-fuHours" className="form-input" type="number" inputMode="numeric" min={1} max={168}
               value={form.defaultFollowUpHours} onChange={(e) => set("defaultFollowUpHours", Number(e.target.value))} />
-            <span className="form-hint">Used when Follow-up type is set to Offset.</span>
+            <span className="form-hint"></span>
           </div>
           <div className="form-field">
-            <label className="form-label" htmlFor="s-notif">Notification lead time (minutes)</label>
+            <label className="form-label" htmlFor="s-notif">Reminder lead time (minutes)</label>
             <input id="s-notif" className="form-input" type="number" inputMode="numeric" min={0} max={1440}
               value={form.notificationLeadMins} onChange={(e) => set("notificationLeadMins", Number(e.target.value))} />
-            <span className="form-hint">How early to send a follow-up reminder.</span>
+            <span className="form-hint"></span>
           </div>
         </section>
 
@@ -562,18 +595,41 @@ export function SettingsScreen({ onClose, onSignedOut }: SettingsScreenProps) {
           <div className="data-action-row">
             <div className="data-action-group">
               <p className="data-action-label">Backup file</p>
-              <p className="form-hint">Export all patient data as an encrypted file. Import it to restore on a new device or browser.</p>
+              <p className="form-hint">Export all patient data as an encrypted file. Importing a backup <strong>replaces</strong> all current patient data.</p>
               <div className="data-action-buttons">
-                <button className="btn btn-secondary data-btn" onClick={handleExportEncrypted} disabled={exporting || importing}>
+                <button className="btn btn-secondary data-btn" onClick={handleExportEncrypted} disabled={exporting || importing || !!showImportConfirm}>
                   <Download size={14} aria-hidden />{exporting ? "Exporting…" : "Export backup"}
                 </button>
                 <button className="btn btn-secondary data-btn"
                   onClick={() => { setImportResult(null); importInputRef.current?.click(); }}
-                  disabled={importing || exporting}>
+                  disabled={importing || exporting || !!showImportConfirm}>
                   <Upload size={14} aria-hidden />{importing ? "Importing…" : "Import backup"}
                 </button>
                 <input ref={importInputRef} type="file" accept=".slate" style={{ display: "none" }} onChange={handleImportFile} />
               </div>
+
+              {/* Replace warning — shown after a file is chosen or Restore is tapped */}
+              {showImportConfirm && (
+                <div className="ai-warning" role="alert" aria-live="polite" style={{ marginTop: "0.75rem" }}>
+                  <p className="ai-warning-title"><AlertTriangle size={16} aria-hidden /> This will replace all patient data</p>
+                  <p>
+                    Importing will <strong>permanently delete</strong> all current acute referrals,
+                    pre-assessments, and follow-ups, then replace them with the contents of the backup.
+                    Your settings are not affected.
+                  </p>
+                  <p>This cannot be undone.</p>
+                  <div className="ai-warning-actions">
+                    <button className="btn btn-secondary"
+                      onClick={() => { setShowImportConfirm(null); pendingImportFileRef.current = null; }}>
+                      Cancel
+                    </button>
+                    <button className="btn btn-danger" onClick={confirmImport}>
+                      Replace all data
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {importResult && (
                 <p className={importResult.ok ? "data-import-ok" : "auth-error"} style={{ marginTop: "0.4rem" }}>
                   {importResult.message}
@@ -615,10 +671,6 @@ export function SettingsScreen({ onClose, onSignedOut }: SettingsScreenProps) {
                 Slate creates a single private <strong>“Slate Backup”</strong> document the first time you
                 back up, and only ever touches that one document. No other files in your Drive are accessed.
               </p>
-              <p>
-                Backups are appended, never overwritten, so previous exports are preserved. This feature
-                requires signing in with Google.
-              </p>
               <div className="ai-warning-actions">
                 <button className="btn btn-secondary" onClick={() => setShowGdocsWarning(false)}>Cancel</button>
                 <button className="btn btn-primary" onClick={() => { setShowGdocsWarning(false); set("gdocsEnabled", true); }}>
@@ -643,35 +695,29 @@ export function SettingsScreen({ onClose, onSignedOut }: SettingsScreenProps) {
               )}
 
               {isGoogleUser && (
-                <div className="data-action-row" style={{ marginTop: 0, borderTop: "none" }}>
-                  <div className="data-action-group">
-                    <p className="data-action-label">Google Drive backup</p>
-                    <p className="form-hint">
-                      Slate manages the backup document automatically — there is nothing to configure.
-                    </p>
-                    <div className="data-action-buttons">
-                      <button className="btn btn-secondary data-btn"
-                        onClick={handleGdocsExport} disabled={gdocsBusy}>
-                        <Download size={14} aria-hidden />
-                        {gdocsExporting ? "Backing up…" : "Back up now"}
-                      </button>
-                      <button className="btn btn-secondary data-btn"
-                        onClick={handleGdocsImport} disabled={gdocsBusy || !form.gdocsDocId.trim()}>
-                        <Upload size={14} aria-hidden />
-                        {gdocsImporting ? "Restoring…" : "Restore from Drive"}
-                      </button>
-                    </div>
-                    {!form.gdocsDocId.trim() && (
-                      <p className="form-hint" style={{ marginTop: "0.4rem" }}>
-                        Restore becomes available after your first backup.
-                      </p>
-                    )}
-                    {gdocsResult && (
-                      <p className={gdocsResult.ok ? "data-import-ok" : "auth-error"} style={{ marginTop: "0.5rem" }}>
-                        {gdocsResult.message}
-                      </p>
-                    )}
+                <div className="form-section-body" style={{ paddingTop: "0.5rem" }}>
+                  <div className="data-action-buttons">
+                    <button className="btn btn-secondary data-btn"
+                      onClick={handleGdocsExport} disabled={gdocsBusy || !!showImportConfirm}>
+                      <Download size={14} aria-hidden />
+                      {gdocsExporting ? "Backing up…" : "Backup now"}
+                    </button>
+                    <button className="btn btn-secondary data-btn"
+                      onClick={handleGdocsImport} disabled={gdocsBusy || !form.gdocsDocId.trim() || !!showImportConfirm}>
+                      <Upload size={14} aria-hidden />
+                      {gdocsImporting ? "Restoring…" : "Restore from Drive"}
+                    </button>
                   </div>
+                  {!form.gdocsDocId.trim() && (
+                    <p className="form-hint" style={{ marginTop: "0.4rem" }}>
+                      Restore becomes available after your first backup.
+                    </p>
+                  )}
+                  {gdocsResult && (
+                    <p className={gdocsResult.ok ? "data-import-ok" : "auth-error"} style={{ marginTop: "0.5rem" }}>
+                      {gdocsResult.message}
+                    </p>
+                  )}
                 </div>
               )}
             </div>

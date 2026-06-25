@@ -52,9 +52,8 @@ function LocalDataBanner({ onDismiss }: { onDismiss: () => void }) {
   return (
     <div className="local-data-banner" role="status" aria-live="polite">
       <p className="local-data-banner-text">
-        <strong>Data is stored locally on this device only.</strong>{" "}
-        Secure login, encrypted cloud backup and multi-device sync are coming
-        in a future release.
+        <strong>Data is stored locally on this device only unless you log in and manually back up.</strong>{" "}
+        Encrypted cloud backup and multi-device sync are coming in a future release.
       </p>
       <button
         className="local-data-banner-dismiss"
@@ -244,6 +243,11 @@ export default function App() {
   const handleSignedOut = useCallback(async () => {
     navHistoryRef.current = [];
     setNav({ tab: "acute", view: "list" });
+    // CRITICAL: set profile to null FIRST so the loading gate renders
+    // immediately. Without this, the Acute list screen re-renders on the
+    // now-empty DB before ensureActiveProfile() has run, which throws
+    // "No active profile" and leaves a white screen.
+    setProfile(null);
     closeSettings();
     try {
       const fresh = await ensureActiveProfile();

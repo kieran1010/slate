@@ -479,12 +479,22 @@ export async function importData(payload: ImportPayload): Promise<void> {
     db.preAssess,
     db.followUp,
     async () => {
-      // Patients: upsert — keyed on [profileId+nhi] so existing
-      // identity rows are updated rather than duplicated.
+      // REPLACE model: wipe all clinical data for this profile first,
+      // then insert the backup. Settings and profile identity are
+      // untouched (they live in db.config / db.profiles, not here).
+      // All four clears + all inserts are inside a single transaction,
+      // so a failure mid-way leaves the database in its original state.
+      await db.patients.where("profileId").equals(pid).delete();
+      await db.acute.where("profileId").equals(pid).delete();
+      await db.preAssess.where("profileId").equals(pid).delete();
+      await db.followUp.where("profileId").equals(pid).delete();
+
+      // Re-insert from the backup payload. No id → Dexie assigns a
+      // fresh auto-increment PK, avoiding any collision with the
+      // (now-deleted) previous rows.
       for (const p of payload.patients) {
-        await db.patients.put({ ...p, profileId: pid });
+        await db.patients.add({ ...p, profileId: pid });
       }
-      // Records: no id → Dexie assigns a fresh auto-increment PK.
       for (const r of payload.acute) {
         await db.acute.add({ ...r, profileId: pid });
       }
