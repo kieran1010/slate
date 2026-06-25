@@ -160,6 +160,18 @@ export function SettingsScreen({ onClose, onSignedOut }: SettingsScreenProps) {
   } | null>(null);
 
   // ── Remote sync ───────────────────────────────────────────
+  // Fires once per user session (guarded by hasSyncedRef) when a
+  // user object appears, i.e. on sign-in.
+  //
+  // IMPORTANT: we call setForm directly here rather than using the
+  // setInitialized(false) → useLiveQuery → form-population-effect
+  // chain. That chain has a timing race: setInitialized(false) causes
+  // an immediate React re-render, but useLiveQuery's notification of
+  // the Dexie write is asynchronous. The form population effect
+  // therefore re-runs with stale existingConfig, populates from the
+  // wrong data, and sets initialized back to true — so the subsequent
+  // correct Dexie notification is ignored. Calling setForm directly
+  // sidesteps that entirely.
   const hasSyncedRef = useRef(false);
 
   useEffect(() => {
@@ -169,10 +181,27 @@ export function SettingsScreen({ onClose, onSignedOut }: SettingsScreenProps) {
       try {
         const remote = await loadRemoteSettings(user.uid);
         if (Object.keys(remote).length > 0) {
+          // Persist to Dexie so the data survives Settings closing.
           await saveConfig(remote);
-          setInitialized(false);
+          // Merge remote over defaults and update the form immediately.
+          // This is the source of truth — don't wait for useLiveQuery.
+          const merged = { ...DEFAULT_APP_CONFIG, ...remote };
+          setForm({
+            clinicianName:         merged.clinicianName,
+            clinicianRole:         merged.clinicianRole,
+            defaultFollowUpHours:  merged.defaultFollowUpHours,
+            notificationLeadMins:  merged.notificationLeadMins,
+            aiEnabled:             merged.aiEnabled,
+            anthropicApiKey:       merged.anthropicApiKey,
+            encryptionPassphrase:  merged.encryptionPassphrase,
+            gdocsEnabled:          merged.gdocsEnabled,
+            gdocsDocId:            merged.gdocsDocId,
+          });
         }
-      } catch { /* fail silently */ }
+      } catch (err) {
+        // Fail silently — e.g. offline. Local data is unaffected.
+        console.error("Remote settings sync failed:", err);
+      }
     })();
   }, [user]);
 
