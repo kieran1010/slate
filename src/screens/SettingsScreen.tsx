@@ -369,7 +369,7 @@ export function SettingsScreen({ onClose, onSignedOut }: SettingsScreenProps) {
     // devices via your account). No manual entry.
     const docId = form.gdocsDocId.trim();
     if (!docId) {
-      setGdocsResult({ ok: false, message: "No cloud backup found yet — back up first." });
+      setGdocsResult({ ok: false, message: "No backup found for this account. Back up from another device first, then sign in here to restore." });
       return;
     }
     if (!form.encryptionPassphrase.trim()) { alert("Please enter your encryption passphrase first."); return; }
@@ -703,16 +703,11 @@ export function SettingsScreen({ onClose, onSignedOut }: SettingsScreenProps) {
                       {gdocsExporting ? "Backing up…" : "Backup now"}
                     </button>
                     <button className="btn btn-secondary data-btn"
-                      onClick={handleGdocsImport} disabled={gdocsBusy || !form.gdocsDocId.trim() || !!showImportConfirm}>
+                      onClick={handleGdocsImport} disabled={gdocsBusy || !!showImportConfirm}>
                       <Upload size={14} aria-hidden />
                       {gdocsImporting ? "Restoring…" : "Restore from Drive"}
                     </button>
                   </div>
-                  {!form.gdocsDocId.trim() && (
-                    <p className="form-hint" style={{ marginTop: "0.4rem" }}>
-                      Restore becomes available after your first backup.
-                    </p>
-                  )}
                   {gdocsResult && (
                     <p className={gdocsResult.ok ? "data-import-ok" : "auth-error"} style={{ marginTop: "0.5rem" }}>
                       {gdocsResult.message}
