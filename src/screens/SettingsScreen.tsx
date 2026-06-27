@@ -1,15 +1,16 @@
 // ============================================================
 // Slate — SettingsScreen.tsx
 // ============================================================
-// Six sections:
+// Five sections:
 //   ACCOUNT         — Firebase sign-in / sign-out / account mgmt
 //   PROFILE         — clinician name and role
 //   APP DEFAULTS    — follow-up offset, notification lead time
 //   AI FEATURES     — opt-in toggle + API key
-//   DATA            — encryption passphrase, file backup/restore,
-//                     CSV export
-//   GDOCS INTEGRATION — optional, warning-gated; appends encrypted
-//                     backup to a Google Doc the user owns
+//   CSV EXPORT      — unencrypted spreadsheet export
+//
+// Encrypted backup (passphrase, file backup, Google Drive backup) lives
+// in its own screen now — see BackupScreen.tsx, reachable via the icon
+// next to this one in the Brand bar.
 //
 // FILE LOCATION:
 //   src/screens/SettingsScreen.tsx
@@ -19,7 +20,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import {
   Eye, EyeOff, AlertTriangle, Check, X,
-  LogOut, UserX, Download, Upload, FileDown,
+  LogOut, UserX, FileDown,
 } from "lucide-react";
 import {
   signInWithPopup,
@@ -33,19 +34,8 @@ import { getConfig, saveConfig, clearAllLocalData } from "../data/repository";
 import { loadRemoteSettings, saveRemoteSettings } from "../data/firebaseSync";
 import { DEFAULT_APP_CONFIG } from "../data/models";
 import { useAuth } from "../hooks/useAuth";
-import {
-  exportEncrypted,
-  importEncrypted,
-  exportCsv,
-  buildEncryptedPayload,
-  importFromEncryptedString,
-} from "../utils/exportImport";
-import {
-  requestDriveToken,
-  createBackupDoc,
-  appendToGoogleDoc,
-  readLatestFromGoogleDoc,
-} from "../utils/gdocs";
+import { exportCsv } from "../utils/exportImport";
+import { GDOCS_SCOPE, cacheDriveToken } from "../utils/gdocs";
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -56,9 +46,6 @@ interface FormState {
   notificationLeadMins: number;
   aiEnabled: boolean;
   anthropicApiKey: string;
-  encryptionPassphrase: string;
-  gdocsEnabled: boolean;
-  gdocsDocId: string;
 }
 
 interface SettingsScreenProps {
@@ -68,6 +55,10 @@ interface SettingsScreenProps {
   // sign-out and the local-data wipe have completed. App uses it to
   // recreate a fresh profile and reset the UI without a page reload.
   onSignedOut?: () => void;
+  // Called after a fresh sign-in (not a routine Settings re-open) once
+  // settings have synced and an existing backup was found for the
+  // account. App opens the Backup screen so the user can restore it.
+  onBackupFound?: () => void;
 }
 
 // ── Firebase error messages ────────────────────────────────────
@@ -103,7 +94,7 @@ function firebaseErrorMessage(err: unknown): string {
 
 // ── Component ─────────────────────────────────────────────────
 
-export function SettingsScreen({ onClose, onSignedOut }: SettingsScreenProps) {
+export function SettingsScreen({ onClose, onSignedOut, onBackupFound }: SettingsScreenProps) {
   const { user, loading: authLoading } = useAuth();
   const existingConfig = useLiveQuery(() => getConfig(), []);
 
@@ -115,15 +106,10 @@ export function SettingsScreen({ onClose, onSignedOut }: SettingsScreenProps) {
     notificationLeadMins: DEFAULT_APP_CONFIG.notificationLeadMins,
     aiEnabled: DEFAULT_APP_CONFIG.aiEnabled,
     anthropicApiKey: DEFAULT_APP_CONFIG.anthropicApiKey,
-    encryptionPassphrase: DEFAULT_APP_CONFIG.encryptionPassphrase,
-    gdocsEnabled: DEFAULT_APP_CONFIG.gdocsEnabled,
-    gdocsDocId: DEFAULT_APP_CONFIG.gdocsDocId,
   });
   const [initialized, setInitialized] = useState(false);
   const [showAiWarning, setShowAiWarning] = useState(false);
-  const [showGdocsWarning, setShowGdocsWarning] = useState(false);
   const [keyVisible, setKeyVisible] = useState(false);
-  const [passphraseVisible, setPassphraseVisible] = useState(false);
   const [saving, setSaving] = useState(false);
   const [toastVisible, setToastVisible] = useState(false);
 
@@ -136,28 +122,8 @@ export function SettingsScreen({ onClose, onSignedOut }: SettingsScreenProps) {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteWorking, setDeleteWorking] = useState(false);
 
-  // ── Data / export / import state ──────────────────────────
-  const [exporting, setExporting] = useState(false);
+  // ── CSV export state ───────────────────────────────────────
   const [exportingCsv, setExportingCsv] = useState(false);
-  const [importing, setImporting] = useState(false);
-  const [importResult, setImportResult] = useState<{
-    ok: boolean; message: string;
-  } | null>(null);
-  const importInputRef = useRef<HTMLInputElement>(null);
-
-  // Two-step import warning: the user must confirm before we wipe
-  // clinical data. For file import, we hold the chosen File object
-  // here so we can use it after confirmation without re-opening the
-  // picker. For GDocs restore the same confirm state is reused.
-  const [showImportConfirm, setShowImportConfirm] = useState<"file" | "gdocs" | null>(null);
-  const pendingImportFileRef = useRef<File | null>(null);
-
-  // ── GDocs state ───────────────────────────────────────────
-  const [gdocsExporting, setGdocsExporting] = useState(false);
-  const [gdocsImporting, setGdocsImporting] = useState(false);
-  const [gdocsResult, setGdocsResult] = useState<{
-    ok: boolean; message: string;
-  } | null>(null);
 
   // ── Remote sync ───────────────────────────────────────────
   // Fires once per user session (guarded by hasSyncedRef) when a
@@ -173,11 +139,22 @@ export function SettingsScreen({ onClose, onSignedOut }: SettingsScreenProps) {
   // correct Dexie notification is ignored. Calling setForm directly
   // sidesteps that entirely.
   const hasSyncedRef = useRef(false);
+  // True only for the sync triggered by an interactive "Continue with
+  // Google" click in THIS session — NOT for a sync on a routine Settings
+  // open while already signed in. Gates the auto-save/close/backup-lookup
+  // sequence below to "right after logging in", as intended.
+  const justSignedInRef = useRef(false);
+  // Carries a found backup's doc id from the sync below through to
+  // handleSave's post-close step (see handleSave).
+  const pendingBackupDocIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!user || hasSyncedRef.current) return;
     hasSyncedRef.current = true;
+    const freshSignIn = justSignedInRef.current;
+    justSignedInRef.current = false;
     void (async () => {
+      let foundDocId: string | null = null;
       try {
         const remote = await loadRemoteSettings(user.uid);
         if (Object.keys(remote).length > 0) {
@@ -187,22 +164,36 @@ export function SettingsScreen({ onClose, onSignedOut }: SettingsScreenProps) {
           // This is the source of truth — don't wait for useLiveQuery.
           const merged = { ...DEFAULT_APP_CONFIG, ...remote };
           setForm({
-            clinicianName:         merged.clinicianName,
-            clinicianRole:         merged.clinicianRole,
-            defaultFollowUpHours:  merged.defaultFollowUpHours,
-            notificationLeadMins:  merged.notificationLeadMins,
-            aiEnabled:             merged.aiEnabled,
-            anthropicApiKey:       merged.anthropicApiKey,
-            encryptionPassphrase:  merged.encryptionPassphrase,
-            gdocsEnabled:          merged.gdocsEnabled,
-            gdocsDocId:            merged.gdocsDocId,
+            clinicianName:        merged.clinicianName,
+            clinicianRole:        merged.clinicianRole,
+            defaultFollowUpHours: merged.defaultFollowUpHours,
+            notificationLeadMins: merged.notificationLeadMins,
+            aiEnabled:            merged.aiEnabled,
+            anthropicApiKey:      merged.anthropicApiKey,
           });
+          // Backup settings (passphrase/gdocsDocId) live on BackupScreen
+          // now, but they're still part of AppConfig and were just
+          // persisted to Dexie above — we only need the doc id here, to
+          // know whether an existing backup is worth surfacing below.
+          foundDocId = merged.gdocsDocId || null;
         }
       } catch (err) {
         // Fail silently — e.g. offline. Local data is unaffected.
         console.error("Remote settings sync failed:", err);
       }
+
+      if (!freshSignIn) return;
+      // Right after an interactive sign-in: save and close automatically
+      // (the user asked to sign in, not to fill in this form), and if the
+      // account already has a backup on file, hand off to Backup so they
+      // can choose whether to restore it.
+      pendingBackupDocIdRef.current = foundDocId;
+      void handleSave();
     })();
+    // handleSave deliberately omitted: it closes over `form`, which would
+    // re-run this effect on every keystroke. hasSyncedRef already limits
+    // this to once per sign-in.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
   // ── Populate form from Dexie ──────────────────────────────
@@ -215,9 +206,6 @@ export function SettingsScreen({ onClose, onSignedOut }: SettingsScreenProps) {
       notificationLeadMins: existingConfig.notificationLeadMins,
       aiEnabled: existingConfig.aiEnabled,
       anthropicApiKey: existingConfig.anthropicApiKey,
-      encryptionPassphrase: existingConfig.encryptionPassphrase,
-      gdocsEnabled: existingConfig.gdocsEnabled,
-      gdocsDocId: existingConfig.gdocsDocId,
     });
     setInitialized(true);
   }, [existingConfig, initialized]);
@@ -239,9 +227,6 @@ export function SettingsScreen({ onClose, onSignedOut }: SettingsScreenProps) {
         notificationLeadMins: Math.max(0, Number(form.notificationLeadMins) || 60),
         aiEnabled: form.aiEnabled,
         anthropicApiKey: form.anthropicApiKey.trim(),
-        encryptionPassphrase: form.encryptionPassphrase,
-        gdocsEnabled: form.gdocsEnabled,
-        gdocsDocId: form.gdocsDocId.trim(),
       };
       await saveConfig(config);
       if (user) await saveRemoteSettings(user.uid, config);
@@ -252,6 +237,10 @@ export function SettingsScreen({ onClose, onSignedOut }: SettingsScreenProps) {
       setTimeout(() => {
         setToastVisible(false);
         onClose?.();
+        // If a sign-in just found an existing backup, hand off to Backup.
+        const foundDocId = pendingBackupDocIdRef.current;
+        pendingBackupDocIdRef.current = null;
+        if (foundDocId) onBackupFound?.();
       }, 900);
     } catch (err) {
       console.error("Settings save failed:", err);
@@ -265,8 +254,16 @@ export function SettingsScreen({ onClose, onSignedOut }: SettingsScreenProps) {
   async function handleGoogleSignIn() {
     setAuthWorking(true); setAuthError("");
     try {
-      await signInWithPopup(firebaseAuth, new GoogleAuthProvider());
+      // Request Drive/Docs access in the same consent screen as sign-in,
+      // rather than waiting until the user first opens Backup — one
+      // popup covers everything instead of two.
+      const provider = new GoogleAuthProvider();
+      provider.addScope(GDOCS_SCOPE);
+      const result = await signInWithPopup(firebaseAuth, provider);
+      const credential = GoogleAuthProvider.credentialFromResult(result);
+      if (credential?.accessToken) cacheDriveToken(credential.accessToken);
       hasSyncedRef.current = false;
+      justSignedInRef.current = true;
     } catch (err) { setAuthError(firebaseErrorMessage(err)); }
     finally { setAuthWorking(false); }
   }
@@ -301,114 +298,13 @@ export function SettingsScreen({ onClose, onSignedOut }: SettingsScreenProps) {
     }
   }
 
-  // ── File export / import ──────────────────────────────────
-  async function handleExportEncrypted() {
-    if (!form.encryptionPassphrase.trim()) { alert("Please set an encryption passphrase first."); return; }
-    setExporting(true);
-    try { await exportEncrypted(form.encryptionPassphrase); }
-    catch (err) { console.error(err); alert("Export failed. Please try again."); }
-    finally { setExporting(false); }
-  }
-
-  // Stage the chosen file and show the replace-warning dialog.
-  // The actual import runs in confirmImport() after the user confirms.
-  function handleImportFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (!form.encryptionPassphrase.trim()) {
-      alert("Please enter your encryption passphrase first.");
-      if (importInputRef.current) importInputRef.current.value = "";
-      return;
-    }
-    pendingImportFileRef.current = file;
-    if (importInputRef.current) importInputRef.current.value = "";
-    setImportResult(null);
-    setShowImportConfirm("file");
-  }
-
-  // Called after the user confirms the replace warning for either
-  // file or GDocs import.
-  async function confirmImport() {
-    const kind = showImportConfirm;
-    setShowImportConfirm(null);
-
-    if (kind === "file") {
-      const file = pendingImportFileRef.current;
-      pendingImportFileRef.current = null;
-      if (!file) return;
-      setImporting(true); setImportResult(null);
-      try {
-        const c = await importEncrypted(file, form.encryptionPassphrase);
-        setImportResult({ ok: true, message: `Replaced with ${c.acute} acute, ${c.preAssess} pre-assessments, ${c.followUp} follow-ups.` });
-      } catch (err) {
-        setImportResult({ ok: false, message: err instanceof Error ? err.message : "Import failed." });
-      } finally { setImporting(false); }
-
-    } else if (kind === "gdocs") {
-      const docId = form.gdocsDocId.trim();
-      if (!docId) return;
-      setGdocsImporting(true); setGdocsResult(null);
-      try {
-        const token = await requestDriveToken();
-        const encryptedText = await readLatestFromGoogleDoc(docId, token);
-        const c = await importFromEncryptedString(encryptedText, form.encryptionPassphrase);
-        setGdocsResult({ ok: true, message: `Replaced with ${c.acute} acute, ${c.preAssess} pre-assessments, ${c.followUp} follow-ups.` });
-      } catch (err) {
-        setGdocsResult({ ok: false, message: err instanceof Error ? err.message : "Restore failed." });
-      } finally { setGdocsImporting(false); }
-    }
-  }
-
+  // ── CSV export ──────────────────────────────────────────────
   async function handleExportCsv() {
     setExportingCsv(true);
     try { await exportCsv(); }
     catch (err) { console.error(err); alert("CSV export failed. Please try again."); }
     finally { setExportingCsv(false); }
   }
-
-  // ── GDocs export / import ─────────────────────────────────
-  async function handleGdocsExport() {
-    if (!form.encryptionPassphrase.trim()) { alert("Please set an encryption passphrase before exporting."); return; }
-    setGdocsExporting(true); setGdocsResult(null);
-    try {
-      const token = await requestDriveToken();
-
-      // Use the silently-stored backup Doc, or auto-create one the very
-      // first time. Slate keeps exactly one "Slate Backup" Doc per Google
-      // account; its ID lives in settings and syncs across devices.
-      let docId = form.gdocsDocId.trim();
-      if (!docId) {
-        docId = await createBackupDoc(token);
-        // Persist the new Doc ID immediately (locally + to the account).
-        set("gdocsDocId", docId);
-        await saveConfig({ gdocsDocId: docId });
-        if (user) await saveRemoteSettings(user.uid, { ...form, gdocsDocId: docId });
-      }
-
-      const encrypted = await buildEncryptedPayload(form.encryptionPassphrase);
-      await appendToGoogleDoc(docId, encrypted, token);
-      setGdocsResult({ ok: true, message: "Backed up to Google Drive successfully." });
-    } catch (err) {
-      setGdocsResult({ ok: false, message: err instanceof Error ? err.message : "Export failed." });
-    } finally { setGdocsExporting(false); }
-  }
-
-  function handleGdocsImport() {
-    // The Doc ID is managed silently (stored on first backup, synced across
-    // devices via your account). No manual entry.
-    const docId = form.gdocsDocId.trim();
-    if (!docId) {
-      setGdocsResult({ ok: false, message: "No backup found for this account. Back up from another device first, then sign in here to restore." });
-      return;
-    }
-    if (!form.encryptionPassphrase.trim()) { alert("Please enter your encryption passphrase first."); return; }
-    setGdocsResult(null);
-    setShowImportConfirm("gdocs");
-  }
-
-  // ── Derived ───────────────────────────────────────────────
-  const isGoogleUser = user?.providerData.some((p) => p.providerId === "google.com") ?? false;
-  const gdocsBusy = gdocsExporting || gdocsImporting;
 
   // ── Render ────────────────────────────────────────────────
   return (
@@ -589,168 +485,9 @@ export function SettingsScreen({ onClose, onSignedOut }: SettingsScreenProps) {
           )}
         </section>
 
-        {/* ── Encrypted Backup ─────────────────────────── */}
-        {/* One unified section. The passphrase and the on-device file
-            backup are ALWAYS visible. The Google Drive cloud backup is
-            concealed behind a toggle (warning-gated). There is no manual
-            Doc ID: Slate creates and reuses a single private "Slate Backup"
-            Google Doc per account, storing its ID silently in settings
-            (which sync across devices). */}
-        <section className="form-section" aria-label="Encrypted backup">
-          <div className="form-section-title">Encrypted Backup</div>
-
-          {/* Passphrase — used to encrypt BOTH the file and cloud backups */}
-          <div className="form-field">
-            <label className="form-label" htmlFor="s-passphrase">Encryption passphrase</label>
-            <div className="apikey-row">
-              <input id="s-passphrase" className="form-input"
-                type={passphraseVisible ? "text" : "password"}
-                placeholder="Choose a strong passphrase"
-                value={form.encryptionPassphrase}
-                onChange={(e) => set("encryptionPassphrase", e.target.value)}
-                autoComplete="off" autoCorrect="off" spellCheck={false} />
-              <button className="btn-icon-sm" type="button" onClick={() => setPassphraseVisible((v) => !v)}
-                aria-label={passphraseVisible ? "Hide passphrase" : "Show passphrase"}>
-                {passphraseVisible ? <EyeOff size={16} aria-hidden /> : <Eye size={16} aria-hidden />}
-              </button>
-            </div>
-            <span className="form-hint">
-              Encrypts and decrypts every backup below — both the file and the cloud copy. Stored in
-              your Slate account so it is restored automatically on any device you sign in to.
-            </span>
-          </div>
-
-          {/* File backup — always available, no account required */}
-          <div className="data-action-row">
-            <div className="data-action-group">
-              <p className="data-action-label">Backup file</p>
-              <p className="form-hint">Export all patient data as an encrypted file. Importing a backup <strong>replaces</strong> all current patient data.</p>
-              <div className="data-action-buttons">
-                <button className="btn btn-secondary data-btn" onClick={handleExportEncrypted} disabled={exporting || importing || !!showImportConfirm}>
-                  <Download size={14} aria-hidden />{exporting ? "Exporting…" : "Export backup"}
-                </button>
-                <button className="btn btn-secondary data-btn"
-                  onClick={() => { setImportResult(null); importInputRef.current?.click(); }}
-                  disabled={importing || exporting || !!showImportConfirm}>
-                  <Upload size={14} aria-hidden />{importing ? "Importing…" : "Import backup"}
-                </button>
-                <input ref={importInputRef} type="file" accept=".slate" style={{ display: "none" }} onChange={handleImportFile} />
-              </div>
-
-              {/* Replace warning — shown after a file is chosen or Restore is tapped */}
-              {showImportConfirm && (
-                <div className="ai-warning" role="alert" aria-live="polite" style={{ marginTop: "0.75rem" }}>
-                  <p className="ai-warning-title"><AlertTriangle size={16} aria-hidden /> This will replace all patient data</p>
-                  <p>
-                    Importing will <strong>permanently delete</strong> all current acute referrals,
-                    pre-assessments, and follow-ups, then replace them with the contents of the backup.
-                    Your settings are not affected.
-                  </p>
-                  <p>This cannot be undone.</p>
-                  <div className="ai-warning-actions">
-                    <button className="btn btn-secondary"
-                      onClick={() => { setShowImportConfirm(null); pendingImportFileRef.current = null; }}>
-                      Cancel
-                    </button>
-                    <button className="btn btn-danger" onClick={confirmImport}>
-                      Replace all data
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {importResult && (
-                <p className={importResult.ok ? "data-import-ok" : "auth-error"} style={{ marginTop: "0.4rem" }}>
-                  {importResult.message}
-                </p>
-              )}
-            </div>
-          </div>
-
-          {/* Cloud backup toggle — conceals the Google Drive options below.
-              A top border separates it from the file backup above. */}
-          <div className="form-field" style={{ borderTop: "1px solid var(--border)", paddingTop: "0.85rem", marginTop: "0.5rem" }}>
-            <div className="toggle-row">
-              <span className="toggle-label">
-                Back up to Google Drive
-                <span className="toggle-label-sub">
-                  Appends an encrypted copy to a private “Slate Backup” Google Doc
-                </span>
-              </span>
-              <button className="toggle-track" role="switch" aria-checked={form.gdocsEnabled}
-                aria-label="Back up to Google Drive"
-                onClick={() => {
-                  if (form.gdocsEnabled) { set("gdocsEnabled", false); }
-                  else { setShowGdocsWarning(true); }
-                }}>
-                <span className="toggle-thumb" />
-              </button>
-            </div>
-          </div>
-
-          {showGdocsWarning && (
-            <div className="ai-warning" role="alert" aria-live="polite">
-              <p className="ai-warning-title"><AlertTriangle size={16} aria-hidden /> Privacy notice</p>
-              <p>
-                This writes an <strong>encrypted</strong> copy of your patient data to a Google Doc in your
-                own Google Drive. Your data is encrypted with your passphrase before it leaves this app —
-                Google cannot read it.
-              </p>
-              <p>
-                Slate creates a single private <strong>“Slate Backup”</strong> document the first time you
-                back up, and only ever touches that one document. No other files in your Drive are accessed.
-              </p>
-              <div className="ai-warning-actions">
-                <button className="btn btn-secondary" onClick={() => setShowGdocsWarning(false)}>Cancel</button>
-                <button className="btn btn-primary" onClick={() => { setShowGdocsWarning(false); set("gdocsEnabled", true); }}>
-                  <Check size={14} aria-hidden /> I understand, enable
-                </button>
-              </div>
-            </div>
-          )}
-
-          {form.gdocsEnabled && !showGdocsWarning && (
-            <div>
-              {/* Cloud backup needs a Google-authenticated session for Drive access */}
-              {!isGoogleUser && (
-                <div className="gdocs-notice" role="status">
-                  <AlertTriangle size={14} aria-hidden />
-                  <span>
-                    {user
-                      ? "Cloud backup needs Google sign-in. Sign out and choose “Continue with Google” to use it."
-                      : "Sign in with Google (in the Account section above) to use cloud backup."}
-                  </span>
-                </div>
-              )}
-
-              {isGoogleUser && (
-                <div className="form-section-body" style={{ paddingTop: "0.5rem" }}>
-                  <div className="data-action-buttons">
-                    <button className="btn btn-secondary data-btn"
-                      onClick={handleGdocsExport} disabled={gdocsBusy || !!showImportConfirm}>
-                      <Download size={14} aria-hidden />
-                      {gdocsExporting ? "Backing up…" : "Backup now"}
-                    </button>
-                    <button className="btn btn-secondary data-btn"
-                      onClick={handleGdocsImport} disabled={gdocsBusy || !!showImportConfirm}>
-                      <Upload size={14} aria-hidden />
-                      {gdocsImporting ? "Restoring…" : "Restore from Drive"}
-                    </button>
-                  </div>
-                  {gdocsResult && (
-                    <p className={gdocsResult.ok ? "data-import-ok" : "auth-error"} style={{ marginTop: "0.5rem" }}>
-                      {gdocsResult.message}
-                    </p>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-        </section>
-
         {/* ── CSV Export ──────────────────────────────── */}
-        {/* Kept SEPARATE from Encrypted Backup on purpose: CSV is plain-text
-            patient data for spreadsheets and is NOT encrypted. */}
+        {/* Kept SEPARATE from Backup on purpose: CSV is plain-text patient
+            data for spreadsheets and is NOT encrypted. */}
         <section className="form-section" aria-label="CSV export">
           <div className="form-section-title">CSV Export</div>
           <div className="form-section-body">
@@ -759,9 +496,11 @@ export function SettingsScreen({ onClose, onSignedOut }: SettingsScreenProps) {
               Export all records (including archived) as three CSV files in a zip, suitable for
               spreadsheets. This file is <strong>not encrypted</strong>. There is no CSV import.
             </p>
-            <button className="btn btn-secondary data-btn" onClick={handleExportCsv} disabled={exportingCsv}>
-              <FileDown size={14} aria-hidden />{exportingCsv ? "Exporting…" : "Export CSV"}
-            </button>
+            <div className="data-action-buttons">
+              <button className="btn btn-secondary data-btn" onClick={handleExportCsv} disabled={exportingCsv}>
+                <FileDown size={14} aria-hidden />{exportingCsv ? "Exporting…" : "Export CSV"}
+              </button>
+            </div>
           </div>
         </section>
 

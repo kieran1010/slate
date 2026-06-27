@@ -470,7 +470,31 @@ export interface ImportPayload {
   followUp: Omit<StoredFollowUp, "profileId" | "id">[];
 }
 
-export async function importData(payload: ImportPayload): Promise<void> {
+// REPLACE wipes all clinical data for the profile first, then inserts the
+// backup — the result is exactly the backup's contents.
+// MERGE keeps existing data and adds the backup's records alongside it.
+// Patients are upserted (keyed on nhi, so no duplicates there), but
+// sub-records (acute/preAssess/followUp) have no stable cross-device id,
+// so a record present in both copies will appear twice — the user can
+// archive/delete the duplicate. Acceptable trade-off for "combine" mode.
+export type ImportMode = "replace" | "merge";
+
+export async function hasAnyLocalData(): Promise<boolean> {
+  const pid = await getActiveProfileId();
+  if (!pid) return false;
+  const [acute, preAssess, followUp, patients] = await Promise.all([
+    db.acute.where("profileId").equals(pid).count(),
+    db.preAssess.where("profileId").equals(pid).count(),
+    db.followUp.where("profileId").equals(pid).count(),
+    db.patients.where("profileId").equals(pid).count(),
+  ]);
+  return acute + preAssess + followUp + patients > 0;
+}
+
+export async function importData(
+  payload: ImportPayload,
+  mode: ImportMode = "replace"
+): Promise<void> {
   const pid = await requireActiveProfileId();
   await db.transaction(
     "rw",
@@ -479,21 +503,19 @@ export async function importData(payload: ImportPayload): Promise<void> {
     db.preAssess,
     db.followUp,
     async () => {
-      // REPLACE model: wipe all clinical data for this profile first,
-      // then insert the backup. Settings and profile identity are
-      // untouched (they live in db.config / db.profiles, not here).
-      // All four clears + all inserts are inside a single transaction,
-      // so a failure mid-way leaves the database in its original state.
-      await db.patients.where("profileId").equals(pid).delete();
-      await db.acute.where("profileId").equals(pid).delete();
-      await db.preAssess.where("profileId").equals(pid).delete();
-      await db.followUp.where("profileId").equals(pid).delete();
+      // All clears (if replacing) + all inserts happen inside a single
+      // transaction, so a failure mid-way leaves the database untouched.
+      if (mode === "replace") {
+        await db.patients.where("profileId").equals(pid).delete();
+        await db.acute.where("profileId").equals(pid).delete();
+        await db.preAssess.where("profileId").equals(pid).delete();
+        await db.followUp.where("profileId").equals(pid).delete();
+      }
 
-      // Re-insert from the backup payload. No id → Dexie assigns a
-      // fresh auto-increment PK, avoiding any collision with the
-      // (now-deleted) previous rows.
+      // No id on sub-records → Dexie assigns a fresh auto-increment PK,
+      // avoiding any collision with existing/deleted rows.
       for (const p of payload.patients) {
-        await db.patients.add({ ...p, profileId: pid });
+        await db.patients.put({ ...p, profileId: pid });
       }
       for (const r of payload.acute) {
         await db.acute.add({ ...r, profileId: pid });

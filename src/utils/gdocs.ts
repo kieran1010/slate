@@ -41,11 +41,26 @@ import { firebaseAuth } from "../firebase";
 // drive.file is not accepted for docs.googleapis.com endpoints.
 // Users see a "this app isn't verified" screen on first use; they
 // click Advanced → Go to Slate. Normal for private/internal tools.
-const GDOCS_SCOPE = "https://www.googleapis.com/auth/documents";
+//
+// Requested upfront at Google sign-in (not just when the user first
+// opens Backup) so consent is granted once and reused — see
+// cacheDriveToken() below.
+export const GDOCS_SCOPE = "https://www.googleapis.com/auth/documents";
 
 // ── Token cache (module-level, session-scoped) ────────────────
 let _cachedToken: string | null = null;
 let _tokenExpiry = 0;
+
+/**
+ * Seeds the token cache with an access token obtained elsewhere (e.g.
+ * the credential returned by the Google sign-in popup, when it already
+ * requested GDOCS_SCOPE). Lets requestDriveToken() below skip a second
+ * popup for the rest of the session.
+ */
+export function cacheDriveToken(token: string): void {
+  _cachedToken = token;
+  _tokenExpiry = Date.now() + 55 * 60 * 1000;
+}
 
 // ── Helpers ───────────────────────────────────────────────────
 

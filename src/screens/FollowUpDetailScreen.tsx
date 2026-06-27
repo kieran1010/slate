@@ -55,6 +55,7 @@ import {
 import type { FollowUpType, RecordStatus } from "../data/models";
 import { dateAddHours } from "../data/dates";
 import { AutoTextarea } from "../components/AutoTextarea";
+import { DateTimeField } from "../components/DateTimeField";
 import type { NavigateFn } from "../types/nav";
 
 interface FollowUpDetailScreenProps {
@@ -435,9 +436,9 @@ export function FollowUpDetailScreen({
             <label className="form-label" htmlFor="fu-idate">
               Date &amp; time of intervention
             </label>
-            <input id="fu-idate" className="form-input" type="datetime-local"
+            <DateTimeField id="fu-idate"
               value={form.interventionDate}
-              onChange={(e) => set("interventionDate", e.target.value)} />
+              onChange={(v) => set("interventionDate", v)} />
           </div>
 
           <div className="form-field">
@@ -475,9 +476,9 @@ export function FollowUpDetailScreen({
                   </span>
                 )}
               </label>
-              <input id="fu-due" className="form-input" type="datetime-local"
+              <DateTimeField id="fu-due"
                 value={form.followUpDue}
-                onChange={(e) => set("followUpDue", e.target.value)} />
+                onChange={(v) => set("followUpDue", v)} />
             </div>
           )}
 

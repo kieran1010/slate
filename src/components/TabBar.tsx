@@ -21,9 +21,9 @@ interface TabBarProps {
 }
 
 const TABS: { id: Tab; label: string; Icon: React.FC<{ size: number }> }[] = [
-  { id: "acute",      label: "Acute",      Icon: AlertCircle },
   { id: "pre-assess", label: "Pre-assess", Icon: ClipboardList },
   { id: "follow-up",  label: "Follow-up",  Icon: Bell },
+  { id: "acute",      label: "Acute",      Icon: AlertCircle },
   { id: "archive",    label: "Archive",    Icon: Archive },
 ];
 

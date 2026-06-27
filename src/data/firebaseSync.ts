@@ -45,7 +45,7 @@ export async function loadRemoteSettings(
 
 export async function saveRemoteSettings(
   uid: string,
-  settings: AppConfig
+  settings: Partial<AppConfig>
 ): Promise<void> {
   const ref = doc(firestoreDb, "userSettings", uid);
   // merge: true leaves any extra fields in Firestore untouched

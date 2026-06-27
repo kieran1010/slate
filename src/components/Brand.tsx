@@ -14,15 +14,17 @@
 //   src/components/Brand.tsx
 // ============================================================
 
-import { Settings } from "lucide-react";
+import { Settings, DatabaseBackup } from "lucide-react";
 
 interface BrandProps {
   appName: string;
   // Called when the user taps the gear icon to open Settings.
   onSettingsOpen: () => void;
+  // Called when the user taps the backup icon to open Backup.
+  onBackupOpen: () => void;
 }
 
-export function Brand({ appName, onSettingsOpen }: BrandProps) {
+export function Brand({ appName, onSettingsOpen, onBackupOpen }: BrandProps) {
   return (
     <header className="brandbar">
       {/* Clicking the lockup opens hypnos.one in a new tab.
@@ -54,6 +56,13 @@ export function Brand({ appName, onSettingsOpen }: BrandProps) {
       <span className="brand-divider" aria-hidden="true" />
       {/* flex:1 pushes the gear icon to the far right */}
       <span className="brand-app">{appName}</span>
+      <button
+        className="brand-settings-btn"
+        onClick={onBackupOpen}
+        aria-label="Open backup"
+      >
+        <DatabaseBackup size={20} aria-hidden />
+      </button>
       <button
         className="brand-settings-btn"
         onClick={onSettingsOpen}

@@ -31,6 +31,7 @@ import {
 } from "../data/models";
 import type { RecordStatus } from "../data/models";
 import { AutoTextarea } from "../components/AutoTextarea";
+import { DateTimeField } from "../components/DateTimeField";
 import { useConfig } from "../hooks/useConfig";
 import { formatPreAssess } from "../utils/export";
 import type { NavigateFn } from "../types/nav";
@@ -393,11 +394,9 @@ export function PreAssessDetailScreen({
             <label className="form-label" htmlFor="pa-dos">
               Date &amp; time of surgery
             </label>
-            {/* datetime-local emits "YYYY-MM-DDThh:mm" — exactly our
-                storage format, so no conversion is needed. */}
-            <input id="pa-dos" className="form-input" type="datetime-local"
+            <DateTimeField id="pa-dos"
               value={form.dateOfSurgery}
-              onChange={(e) => set("dateOfSurgery", e.target.value)} />
+              onChange={(v) => set("dateOfSurgery", v)} />
           </div>
 
           <div className="form-field">
@@ -478,7 +477,7 @@ export function PreAssessDetailScreen({
 
           <div className="form-field">
             <label className="form-label" htmlFor="pa-allergies">Allergies</label>
-            <input id="pa-allergies" className="form-input" type="text"
+            <AutoTextarea id="pa-allergies" className="form-textarea"
               placeholder="e.g. NKDA, penicillin, latex"
               value={form.allergies}
               onChange={(e) => set("allergies", e.target.value)} />

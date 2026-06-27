@@ -28,6 +28,7 @@ import {
   listAllFollowUp,
   importData,
   type ImportPayload,
+  type ImportMode,
 } from "../data/repository";
 import type { StoredAcute, StoredPreAssess, StoredFollowUp } from "../data/db";
 import type { Patient } from "../data/models";
@@ -162,6 +163,29 @@ export async function buildEncryptedPayload(
   return encryptPayload(JSON.stringify(payload), passphrase);
 }
 
+// Per-module record count, split by lifecycle state. Reporting these
+// separately (rather than one combined total) avoids a misleading
+// import message: a record archived from, say, Acute (e.g. via "Move to
+// follow-up") still lives in the acute table, so a flat count makes it
+// look like it's still part of the active acute list when it isn't.
+export interface ModuleImportCounts {
+  total: number;
+  active: number;
+  archived: number;
+}
+
+export interface ImportResultCounts {
+  patients: number;
+  acute: ModuleImportCounts;
+  preAssess: ModuleImportCounts;
+  followUp: ModuleImportCounts;
+}
+
+function countByLifecycle(records: { archived: 0 | 1 }[]): ModuleImportCounts {
+  const archived = records.filter((r) => r.archived === 1).length;
+  return { total: records.length, active: records.length - archived, archived };
+}
+
 /**
  * Decrypts an encrypted payload string and imports the data.
  * Shared by the file import and GDocs import flows.
@@ -169,13 +193,9 @@ export async function buildEncryptedPayload(
  */
 export async function importFromEncryptedString(
   encryptedText: string,
-  passphrase: string
-): Promise<{
-  patients: number;
-  acute: number;
-  preAssess: number;
-  followUp: number;
-}> {
+  passphrase: string,
+  mode: ImportMode = "replace"
+): Promise<ImportResultCounts> {
   const decrypted = await decryptPayload(encryptedText, passphrase);
 
   let payload: ImportPayload;
@@ -191,13 +211,13 @@ export async function importFromEncryptedString(
     );
   }
 
-  await importData(payload);
+  await importData(payload, mode);
 
   return {
     patients: payload.patients.length,
-    acute: payload.acute.length,
-    preAssess: payload.preAssess.length,
-    followUp: payload.followUp.length,
+    acute: countByLifecycle(payload.acute),
+    preAssess: countByLifecycle(payload.preAssess),
+    followUp: countByLifecycle(payload.followUp),
   };
 }
 
@@ -218,15 +238,11 @@ export async function exportEncrypted(passphrase: string): Promise<void> {
  */
 export async function importEncrypted(
   file: File,
-  passphrase: string
-): Promise<{
-  patients: number;
-  acute: number;
-  preAssess: number;
-  followUp: number;
-}> {
+  passphrase: string,
+  mode: ImportMode = "replace"
+): Promise<ImportResultCounts> {
   const text = await file.text();
-  return importFromEncryptedString(text, passphrase);
+  return importFromEncryptedString(text, passphrase, mode);
 }
 
 // ── CSV export ────────────────────────────────────────────────

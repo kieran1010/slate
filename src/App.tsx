@@ -33,6 +33,7 @@ import { FollowUpDetailScreen } from "./screens/FollowUpDetailScreen";
 import { ArchiveScreen } from "./screens/ArchiveScreen";
 import { ImportScreen } from "./screens/ImportScreen";
 import { SettingsScreen } from "./screens/SettingsScreen";
+import { BackupScreen } from "./screens/BackupScreen";
 import { ensureActiveProfile } from "./data/profiles";
 import type { Profile } from "./data/db";
 import type { NavState, Tab, NavigateFn } from "./types/nav";
@@ -40,7 +41,7 @@ import type { NavState, Tab, NavigateFn } from "./types/nav";
 const APP_NAME = "Slate";
 
 // Tab order used for swipe-to-switch-tab gesture.
-const TABS_ORDER: Tab[] = ["acute", "pre-assess", "follow-up", "archive"];
+const TABS_ORDER: Tab[] = ["pre-assess", "follow-up", "acute", "archive"];
 
 // Minimum horizontal pixel distance to register as a swipe.
 const SWIPE_THRESHOLD = 60;
@@ -100,6 +101,15 @@ export default function App() {
   const settingsOpenRef = useRef(false);
   useEffect(() => { settingsOpenRef.current = settingsOpen; }, [settingsOpen]);
 
+  // ── Backup modal ───────────────────────────────────────────
+  const [backupOpen, setBackupOpen] = useState(false);
+  const backupOpenRef = useRef(false);
+  useEffect(() => { backupOpenRef.current = backupOpen; }, [backupOpen]);
+  // Set when Settings just found an existing cloud backup right after a
+  // fresh Google sign-in — tells BackupScreen to prompt to restore it
+  // immediately instead of waiting for the user to tap "Restore from Drive".
+  const [autoRestorePrompt, setAutoRestorePrompt] = useState(false);
+
   // ── Local data warning banner ──────────────────────────────
   // Shown until the user dismisses it; dismissal is stored in
   // localStorage so it survives reloads and never reappears on
@@ -133,7 +143,15 @@ export default function App() {
         return;
       }
 
-      // PRIORITY 1 — Settings open: hardware-back closes it and
+      // PRIORITY 1 — Backup open: hardware-back closes it the same way
+      // Settings does (checked first since Backup can briefly sit on top
+      // of Settings during the auto-open-after-sign-in flow).
+      if (backupOpenRef.current) {
+        setBackupOpen(false);
+        return;
+      }
+
+      // PRIORITY 1b — Settings open: hardware-back closes it and
       // reveals whatever screen is behind, instead of navigating or
       // exiting. The history entry pushed when Settings opened has
       // already been consumed by THIS popstate, so we just flip state.
@@ -175,7 +193,17 @@ export default function App() {
   // navigations clear the history (we're at root level).
   const navigate: NavigateFn = useCallback((to) => {
     if ("view" in to && to.view === "detail") {
-      navHistoryRef.current = [...navHistoryRef.current, navRef.current];
+      const current = navRef.current;
+      // Arriving at a detail screen FROM the import screen is a one-way
+      // flow (extract → review → done) — the import screen itself is
+      // never worth going back to. Treat the list as the back-target
+      // instead, so Back/Save after reviewing an imported record lands
+      // on the list rather than re-opening a blank import screen.
+      const backTarget: NavState =
+        "view" in current && current.view === "import"
+          ? { tab: current.tab, view: "list" }
+          : current;
+      navHistoryRef.current = [...navHistoryRef.current, backTarget];
       window.history.pushState(
         { slateNav: true, depth: navHistoryRef.current.length },
         ""
@@ -232,6 +260,32 @@ export default function App() {
     }
     setSettingsOpen(false);
   }, []);
+
+  // ── Backup open / close ─────────────────────────────────────
+  // Mirrors Settings open/close above — same history push/pop dance so
+  // the Android hardware back key closes Backup instead of navigating
+  // away or exiting the app.
+  const openBackup = useCallback(() => {
+    setBackupOpen(true);
+    window.history.pushState({ slateNav: true, backup: true }, "");
+  }, []);
+
+  const closeBackup = useCallback(() => {
+    if (backupOpenRef.current) {
+      suppressNextPopState.current = true;
+      window.history.back();
+    }
+    setBackupOpen(false);
+  }, []);
+
+  // Called by SettingsScreen right after a fresh sign-in finds an
+  // existing backup for the account. Settings has already saved and
+  // closed itself by this point — open Backup with the auto-restore
+  // prompt armed so the user can choose whether to restore it.
+  const handleBackupFound = useCallback(() => {
+    setAutoRestorePrompt(true);
+    openBackup();
+  }, [openBackup]);
 
   // ── Reactive sign-out / account-deletion re-init ───────────
   // Called by SettingsScreen AFTER it has signed out of Firebase and
@@ -339,7 +393,7 @@ export default function App() {
   if (!profile) {
     return (
       <div className="app-shell">
-        <Brand appName={APP_NAME} onSettingsOpen={openSettings} />
+        <Brand appName={APP_NAME} onSettingsOpen={openSettings} onBackupOpen={openBackup} />
         {!bannerDismissed && (
           <LocalDataBanner onDismiss={dismissBanner} />
         )}
@@ -353,7 +407,7 @@ export default function App() {
   // ── Main shell ─────────────────────────────────────────────
   return (
     <div className="app-shell">
-      <Brand appName={APP_NAME} onSettingsOpen={openSettings} />
+      <Brand appName={APP_NAME} onSettingsOpen={openSettings} onBackupOpen={openBackup} />
 
       {/* Local data warning — shown until permanently dismissed */}
       {!bannerDismissed && (
@@ -382,7 +436,29 @@ export default function App() {
           aria-modal="true"
           aria-label="Settings"
         >
-          <SettingsScreen onClose={closeSettings} onSignedOut={handleSignedOut} />
+          <SettingsScreen
+            onClose={closeSettings}
+            onSignedOut={handleSignedOut}
+            onBackupFound={handleBackupFound}
+          />
+        </div>
+      )}
+
+      {/* Backup modal — same full-screen overlay treatment as Settings.
+          Rendered after it in the DOM so it sits on top during the
+          brief window both can be open (auto-open right after sign-in). */}
+      {backupOpen && (
+        <div
+          className="settings-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Backup"
+        >
+          <BackupScreen
+            onClose={closeBackup}
+            autoRestorePrompt={autoRestorePrompt}
+            onAutoRestorePromptHandled={() => setAutoRestorePrompt(false)}
+          />
         </div>
       )}
     </div>
