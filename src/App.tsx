@@ -76,11 +76,11 @@ export default function App() {
   }, []);
 
   // ── Navigation state ───────────────────────────────────────
-  const [nav, setNav] = useState<NavState>({ tab: "acute", view: "list" });
+  const [nav, setNav] = useState<NavState>({ tab: "pre-assess", view: "list" });
 
   // Ref kept in sync with nav so event listeners and callbacks
   // can always read the current value without stale closures.
-  const navRef = useRef<NavState>({ tab: "acute", view: "list" });
+  const navRef = useRef<NavState>({ tab: "pre-assess", view: "list" });
   useEffect(() => { navRef.current = nav; }, [nav]);
 
   // Internal history stack for the Android hardware back key and
@@ -296,7 +296,7 @@ export default function App() {
   // produced the blank-screen-needing-refresh behaviour.
   const handleSignedOut = useCallback(async () => {
     navHistoryRef.current = [];
-    setNav({ tab: "acute", view: "list" });
+    setNav({ tab: "pre-assess", view: "list" });
     // CRITICAL: set profile to null FIRST so the loading gate renders
     // immediately. Without this, the Acute list screen re-renders on the
     // now-empty DB before ensureActiveProfile() has run, which throws
