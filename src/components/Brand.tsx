@@ -27,14 +27,12 @@ interface BrandProps {
 export function Brand({ appName, onSettingsOpen, onBackupOpen }: BrandProps) {
   return (
     <header className="brandbar">
-      {/* Clicking the lockup opens hypnos.one in a new tab.
+      {/* Clicking the lockup opens hypnos.one in this same tab.
           The <a> inherits the .brand-lockup layout styles;
           link-specific overrides (colour, underline) live in
           index.css so they stay out of inline styles. */}
       <a
         href="https://hypnos.one"
-        target="_blank"
-        rel="noopener noreferrer"
         className="brand-lockup"
         aria-label="Hypnos Medical — visit hypnos.one"
       >
