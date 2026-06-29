@@ -16,6 +16,7 @@
   --border: #d4dde6;
   --surface: #f4f7fa;
   --dim: #9babb8;
+  --header-h: 60px;
 
   /* ── derived tokens for on-navy (dark bar) contexts ── */
   /* The base --teal is too dark to read on navy, so this is a
@@ -54,72 +55,77 @@ body {
 
 /* ============================================================
    BRAND BAR — the Hypnos Medical app header (dark navy)
-   Matches the supplied branding image: moon + "Hypnos / MEDICAL"
-   lockup, a divider, then the individual app name.
+   Matches the canonical Hypnos suite header spec: icon + "Hypnos /
+   MEDICAL" lockup, a divider, then the individual app name.
    ============================================================ */
 
-.brandbar {
+.app-header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  height: var(--header-h);
+  background: var(--navy);
+  color: #fff;
   display: flex;
   align-items: center;
-  gap: 0.95rem;
-  background: var(--navy);
-  padding: 0.85rem 1.25rem;
-  color: var(--on-navy);
+  padding: 0 16px;
+  gap: 12px;
 }
 
-.brand-lockup {
-  display: inline-flex;
+.brand {
+  display: flex;
   align-items: center;
   gap: 10px;
-  /* When rendered as an <a> tag (hypnos.one link), reset link
-     styles so it looks identical to the plain div version. */
+  min-width: 0;
+}
+
+/* Not part of the canonical spec — wraps the icon + brand-text so
+   the hypnos.one link target matches the previous brand bar's
+   click target without altering the spec's .brand layout. */
+.brand-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   text-decoration: none;
   color: inherit;
   -webkit-tap-highlight-color: transparent;
 }
 
-.brand-moon {
-  fill: var(--pale);
-  flex: none;
-}
-
-.brand-names {
-  display: flex;
-  flex-direction: column;
-  line-height: 1;
-}
-
+.brand-icon { width: 26px; height: 26px; flex-shrink: 0; }
+.brand-text { display: flex; flex-direction: column; line-height: 1.05; }
 .brand-hypnos {
-  font-family: var(--font-display);
-  font-weight: 500;
-  font-size: 1.5rem;
-  letter-spacing: -0.015em;
-  color: var(--on-navy);
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 13px;
+  letter-spacing: 0.02em;
 }
-
 .brand-medical {
-  font-size: 0.6rem;
-  font-weight: 500;
-  letter-spacing: 0.22em;
-  text-transform: uppercase;
-  color: var(--teal-on-dark);
-  margin-top: 4px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 8px;
+  letter-spacing: 0.18em;
+  color: var(--dim);
+  font-weight: 600;
 }
-
 .brand-divider {
   width: 1px;
-  align-self: stretch;
-  margin: 0.15rem 0;
-  background: var(--on-navy-divider);
+  height: 26px;
+  background: rgba(255, 255, 255, 0.25);
+  flex-shrink: 0;
+}
+.brand-product {
+  font-weight: 700;
+  font-size: 17px;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
 }
 
-.brand-app {
-  font-family: var(--font-body);
-  font-weight: 500;
-  font-size: 1.05rem;
-  color: var(--on-navy);
-  /* Push the settings gear icon to the far right of the bar. */
-  flex: 1;
+/* Not part of the canonical spec — pushes the backup/settings icon
+   buttons to the far right of the header, replacing the old
+   flex:1-on-app-name trick now that the product name lives inside
+   .brand instead of being a direct flex child of the header. */
+.header-actions {
+  display: flex;
+  align-items: center;
+  margin-left: auto;
 }
 
 /* ── Settings gear icon button (in Brand bar) ──────────────── */

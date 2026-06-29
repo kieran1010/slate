@@ -15,6 +15,7 @@
 // ============================================================
 
 import { Settings, DatabaseBackup } from "lucide-react";
+import brandMark from "../assets/brand-mark.png";
 
 interface BrandProps {
   appName: string;
@@ -26,48 +27,43 @@ interface BrandProps {
 
 export function Brand({ appName, onSettingsOpen, onBackupOpen }: BrandProps) {
   return (
-    <header className="brandbar">
-      {/* Clicking the lockup opens hypnos.one in this same tab.
-          The <a> inherits the .brand-lockup layout styles;
-          link-specific overrides (colour, underline) live in
-          index.css so they stay out of inline styles. */}
-      <a
-        href="https://hypnos.one"
-        className="brand-lockup"
-        aria-label="Hypnos Medical — visit hypnos.one"
-      >
-        {/* Feather "moon" crescent — the shared Hypnos mark */}
-        <svg
-          className="brand-moon"
-          width="30"
-          height="30"
-          viewBox="0 0 24 24"
-          aria-hidden="true"
+    <header className="app-header">
+      <div className="brand">
+        {/* Clicking the lockup opens hypnos.one in this same tab.
+            The <a> inherits the .brand-link layout styles;
+            link-specific overrides (colour, underline) live in
+            index.css so they stay out of inline styles. */}
+        <a
+          href="https://hypnos.one"
+          className="brand-link"
+          aria-label="Hypnos Medical — visit hypnos.one"
         >
-          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-        </svg>
-        <div className="brand-names">
-          <span className="brand-hypnos">Hypnos</span>
-          <span className="brand-medical">Medical</span>
-        </div>
-      </a>
-      <span className="brand-divider" aria-hidden="true" />
-      {/* flex:1 pushes the gear icon to the far right */}
-      <span className="brand-app">{appName}</span>
-      <button
-        className="brand-settings-btn"
-        onClick={onBackupOpen}
-        aria-label="Open backup"
-      >
-        <DatabaseBackup size={20} aria-hidden />
-      </button>
-      <button
-        className="brand-settings-btn"
-        onClick={onSettingsOpen}
-        aria-label="Open settings"
-      >
-        <Settings size={20} aria-hidden />
-      </button>
+          <img src={brandMark} alt="" className="brand-icon" />
+          <div className="brand-text">
+            <span className="brand-hypnos">Hypnos</span>
+            <span className="brand-medical">MEDICAL</span>
+          </div>
+        </a>
+        <span className="brand-divider" aria-hidden="true" />
+        <span className="brand-product">{appName}</span>
+      </div>
+      {/* margin-left:auto on .header-actions pushes these to the far right */}
+      <div className="header-actions">
+        <button
+          className="brand-settings-btn"
+          onClick={onBackupOpen}
+          aria-label="Open backup"
+        >
+          <DatabaseBackup size={20} aria-hidden />
+        </button>
+        <button
+          className="brand-settings-btn"
+          onClick={onSettingsOpen}
+          aria-label="Open settings"
+        >
+          <Settings size={20} aria-hidden />
+        </button>
+      </div>
     </header>
   );
 }
