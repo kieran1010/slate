@@ -15,7 +15,7 @@
 // ============================================================
 
 import { Settings, DatabaseBackup } from "lucide-react";
-import brandMark from "../assets/brand-mark.png";
+import brandMark from "../assets/brand-mark-transparent.png";
 
 interface BrandProps {
   appName: string;
