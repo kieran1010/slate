@@ -1,8 +1,8 @@
 // ============================================================
 // Charted PWA — Brand.tsx
 // ============================================================
-// The Hypnos Medical brand bar, matching the suite branding.
-// A dark navy bar with the crescent-moon mark, the
+// The Hypnos Medical brand bar, per the Hypnos Medical brand kit.
+// A dark navy bar with the brand moon, the
 // "Hypnos / MEDICAL" lockup, a divider, then the individual app
 // name. Styling lives in index.css (the .brand* classes).
 //
@@ -15,7 +15,6 @@
 // ============================================================
 
 import { Settings, DatabaseBackup } from "lucide-react";
-import brandMark from "../assets/brand-mark-transparent.png";
 
 interface BrandProps {
   appName: string;
@@ -38,7 +37,10 @@ export function Brand({ appName, onSettingsOpen, onBackupOpen }: BrandProps) {
           className="brand-link"
           aria-label="Hypnos Medical — visit hypnos.one"
         >
-          <img src={brandMark} alt="" className="brand-icon" />
+          {/* Hypnos Medical moon: two-circle construction from the brand kit */}
+          <svg className="brand-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12.2 0A12 12 0 1 0 23.96 13.29A9.14 9.14 0 0 1 12.2 0Z" fill="currentColor" />
+          </svg>
           <div className="brand-text">
             <span className="brand-hypnos">Hypnos</span>
             <span className="brand-medical">MEDICAL</span>
