@@ -39,11 +39,22 @@ export default defineConfig({
         display: "standalone", // looks like a native app, no browser chrome
         orientation: "portrait",
         start_url: "/",
-        // ICONS: intentionally omitted for now. Installable PWAs
-        // want 192x192 and 512x512 PNGs in /public. We'll add real
-        // Charted icons when we have artwork; the app builds and
-        // runs without them (the install prompt just won't show a
-        // custom icon yet).
+        // Hypnos Medical app icon (brand moon on navy), from the
+        // brand kit. The 512 doubles as the maskable icon: the moon
+        // sits inside the safe zone.
+        icons: [
+          { src: "icon-192.png", sizes: "192x192", type: "image/png", purpose: "any" },
+          { src: "icon-512.png", sizes: "512x512", type: "image/png", purpose: "any" },
+          { src: "icon-512.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
+        ],
+      },
+      includeAssets: ["favicon.ico", "favicon.svg", "favicon-96.png", "apple-touch-icon.png"],
+
+      // Precache the self-hosted brand fonts alongside the app shell
+      // (the default patterns cover js/wasm/css/html only), so text
+      // renders in the right face offline.
+      workbox: {
+        globPatterns: ["**/*.{js,wasm,css,html,woff2}"],
       },
 
       // Dev-time: enable the service worker during `npm run dev`

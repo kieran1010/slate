@@ -2,9 +2,15 @@
    Charted PWA — index.css (global theme)
    ============================================================
    Design tokens lifted directly from hypnos.one so this app is
-   visually part of the suite. Fonts (Inter + Playfair Display)
-   are loaded in index.html.
+   visually part of the suite. Fonts (Geist + Gelasio, per the
+   Hypnos Medical brand kit) are self-hosted from public/fonts
+   (SIL OFL).
    ============================================================ */
+
+@font-face { font-family: "Gelasio"; font-weight: 400; font-style: normal; font-display: swap;
+  src: url("/fonts/Gelasio-Regular.woff2") format("woff2"); }
+@font-face { font-family: "Geist"; font-weight: 100 900; font-style: normal; font-display: swap;
+  src: url("/fonts/Geist-Variable.woff2") format("woff2"); }
 
 :root {
   /* ── hypnos.one palette (exact) ── */
@@ -26,8 +32,8 @@
   --on-navy-divider: rgba(255, 255, 255, 0.22);
 
   /* ── type ── */
-  --font-display: "Playfair Display", Georgia, serif;
-  --font-body: "Inter", system-ui, sans-serif;
+  --font-display: "Gelasio", Georgia, "Times New Roman", serif;
+  --font-body: "Geist", Arial, Helvetica, sans-serif;
 }
 
 *,
@@ -91,19 +97,26 @@ body {
   -webkit-tap-highlight-color: transparent;
 }
 
-.brand-icon { width: 26px; height: 26px; flex-shrink: 0; }
+/* Horizontal lockup, per the Hypnos Medical brand kit (README section 7).
+   The .brand / .brand-link flex gaps (10px) supply the moon, rule and
+   product spacing. */
+.brand-icon { width: 22px; height: 22px; flex-shrink: 0; display: block; color: #fff; }
 .brand-text { display: flex; flex-direction: column; line-height: 1.05; }
 .brand-hypnos {
-  font-family: Georgia, 'Times New Roman', serif;
+  font-family: var(--font-display);
+  font-weight: 400;
   font-size: 13px;
   letter-spacing: 0.02em;
 }
 .brand-medical {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family: var(--font-body);
+  font-weight: 600;
   font-size: 8px;
   letter-spacing: 0.18em;
+  /* letter-spacing trails the last letter; pull it back */
+  margin-right: -0.18em;
+  text-transform: uppercase;
   color: var(--dim);
-  font-weight: 600;
 }
 .brand-divider {
   width: 1px;
@@ -112,9 +125,11 @@ body {
   flex-shrink: 0;
 }
 .brand-product {
-  font-weight: 700;
+  font-family: var(--font-body);
+  font-weight: 600;
   font-size: 17px;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.015em;
+  line-height: 1;
   white-space: nowrap;
 }
 
