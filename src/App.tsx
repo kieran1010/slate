@@ -35,6 +35,8 @@ import { ImportScreen } from "./screens/ImportScreen";
 import { SettingsScreen } from "./screens/SettingsScreen";
 import { BackupScreen } from "./screens/BackupScreen";
 import { ensureActiveProfile } from "./data/profiles";
+import { purgeLegacyRemoteSettings } from "./data/firebaseSync";
+import { useAuth } from "./hooks/useAuth";
 import type { Profile } from "./data/db";
 import type { NavState, Tab, NavigateFn } from "./types/nav";
 
@@ -74,6 +76,16 @@ export default function App() {
   useEffect(() => {
     ensureActiveProfile().then(setProfile).catch(console.error);
   }, []);
+
+  // ── Legacy settings cleanup ────────────────────────────────
+  // Older versions stored the backup passphrase in Firestore. Remove it
+  // (and the old Google Docs backup fields) as soon as a signed-in
+  // session starts, rather than waiting for Settings to be opened.
+  const { user } = useAuth();
+  const uid = user?.uid;
+  useEffect(() => {
+    if (uid) void purgeLegacyRemoteSettings(uid);
+  }, [uid]);
 
   // ── Navigation state ───────────────────────────────────────
   const [nav, setNav] = useState<NavState>({ tab: "pre-assess", view: "list" });

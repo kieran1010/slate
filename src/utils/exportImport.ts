@@ -5,10 +5,9 @@
 //
 //   ENCRYPTED BACKUP (.slate)
 //     All clinical data → JSON → AES-256-GCM encrypted →
-//     base64 text file. The passphrase is stored in the user's
-//     Slate account (Firestore) so it is restored automatically
-//     on sign-in, enabling import on a new device without the
-//     user needing to memorise the passphrase.
+//     base64 text file. The passphrase is stored on this device
+//     only (never in Firestore), so the user must enter it to
+//     import on a new device.
 //
 //   CSV ZIP (.zip)
 //     Three CSVs (acute, pre-assessment, follow-up) including
@@ -139,7 +138,7 @@ function followUpToCsv(
 
 /**
  * Builds an encrypted payload string from all local patient
- * data. Shared by the file download and GDocs export flows.
+ * data. Shared by the file download and Google Drive backup flows.
  */
 export async function buildEncryptedPayload(
   passphrase: string
@@ -188,7 +187,7 @@ function countByLifecycle(records: { archived: 0 | 1 }[]): ModuleImportCounts {
 
 /**
  * Decrypts an encrypted payload string and imports the data.
- * Shared by the file import and GDocs import flows.
+ * Shared by the file import and Google Drive restore flows.
  * Returns record counts for the success message.
  */
 export async function importFromEncryptedString(
@@ -224,7 +223,7 @@ export async function importFromEncryptedString(
 /**
  * Exports all patient data as an encrypted .slate file.
  * The file format is produced by crypto.ts and is safe to store
- * as plain text (e.g. in a Google Doc for GDocs integration).
+ * as plain text (e.g. the Google Drive backup file).
  */
 export async function exportEncrypted(passphrase: string): Promise<void> {
   const encrypted = await buildEncryptedPayload(passphrase);

@@ -79,7 +79,7 @@ async function deriveKey(
 /**
  * Encrypts a plaintext string with the given passphrase.
  * Returns a versioned, pipe-delimited base64 string that can
- * be stored as plain text (file, Google Doc, clipboard, etc.).
+ * be stored as plain text (file, Google Drive, clipboard, etc.).
  */
 export async function encryptPayload(
   plaintext: string,

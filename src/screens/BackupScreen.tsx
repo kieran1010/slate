@@ -6,8 +6,13 @@
 // Three things live here:
 //   PASSPHRASE   — encrypts/decrypts both backup types below.
 //   FILE BACKUP  — export/import a .slate file, no account needed.
-//   GOOGLE DRIVE — optional, warning-gated; appends an encrypted
-//                  backup to a private "Slate Backup" Google Doc.
+//   GOOGLE DRIVE — optional, warning-gated; keeps one encrypted
+//                  backup file (slate-backup.slate) in the user's
+//                  Drive, overwritten on each backup. See
+//                  utils/googleDrive.ts.
+//
+// The passphrase is stored on this device only, never in Firestore,
+// so it must be typed on each new device.
 //
 // IMPORT SAFETY: if the device already has patient data, the user
 // is asked to choose Replace (wipe local, use the backup) or Merge
@@ -22,7 +27,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { Eye, EyeOff, AlertTriangle, Check, X, Download, Upload } from "lucide-react";
 import { getConfig, saveConfig, hasAnyLocalData, type ImportMode } from "../data/repository";
-import { loadRemoteSettings, saveRemoteSettings } from "../data/firebaseSync";
+import { saveRemoteSettings } from "../data/firebaseSync";
 import { DEFAULT_APP_CONFIG } from "../data/models";
 import { useAuth } from "../hooks/useAuth";
 import {
@@ -34,26 +39,27 @@ import {
   type ModuleImportCounts,
 } from "../utils/exportImport";
 import {
-  requestDriveToken,
-  createBackupDoc,
-  appendToGoogleDoc,
-  readLatestFromGoogleDoc,
-} from "../utils/gdocs";
+  isDriveConfigured,
+  preloadGoogleSignIn,
+  getDriveToken,
+  revokeDriveToken,
+  findBackupFile,
+  readBackupFile,
+  writeBackupFile,
+} from "../utils/googleDrive";
 
 // ── Types ─────────────────────────────────────────────────────
 
 interface FormState {
   encryptionPassphrase: string;
-  gdocsEnabled: boolean;
-  gdocsDocId: string;
+  driveBackupEnabled: boolean;
 }
 
 interface BackupScreenProps {
   onClose?: () => void;
   // Set when this screen was opened automatically right after a Google
-  // sign-in that found an existing backup for the account — triggers the
-  // restore-confirm dialog immediately instead of waiting for the user
-  // to tap "Restore from Drive" themselves.
+  // sign-in on an account that backs up to Drive — shows a prompt to
+  // enter the passphrase and restore.
   autoRestorePrompt?: boolean;
   onAutoRestorePromptHandled?: () => void;
 }
@@ -86,19 +92,17 @@ export function BackupScreen({
   onAutoRestorePromptHandled,
 }: BackupScreenProps) {
   const { user } = useAuth();
-  const isGoogleUser = user?.providerData.some((p) => p.providerId === "google.com") ?? false;
   const existingConfig = useLiveQuery(() => getConfig(), []);
 
   const [form, setForm] = useState<FormState>({
     encryptionPassphrase: DEFAULT_APP_CONFIG.encryptionPassphrase,
-    gdocsEnabled: DEFAULT_APP_CONFIG.gdocsEnabled,
-    gdocsDocId: DEFAULT_APP_CONFIG.gdocsDocId,
+    driveBackupEnabled: DEFAULT_APP_CONFIG.driveBackupEnabled,
   });
   const [initialized, setInitialized] = useState(false);
   const [passphraseVisible, setPassphraseVisible] = useState(false);
   const [saving, setSaving] = useState(false);
   const [toastVisible, setToastVisible] = useState(false);
-  const [showGdocsWarning, setShowGdocsWarning] = useState(false);
+  const [showDriveWarning, setShowDriveWarning] = useState(false);
 
   // ── File export / import state ─────────────────────────────
   const [exporting, setExporting] = useState(false);
@@ -107,69 +111,47 @@ export function BackupScreen({
   const importInputRef = useRef<HTMLInputElement>(null);
   const pendingImportFileRef = useRef<File | null>(null);
 
-  // Replace-vs-merge confirm, shared by file and GDocs import. Holds which
+  // Replace-vs-merge confirm, shared by file and Drive import. Holds which
   // kind triggered it, plus whether local data exists (decides which
   // buttons to show — there's nothing to "replace" on an empty device).
-  const [showImportConfirm, setShowImportConfirm] = useState<"file" | "gdocs" | null>(null);
+  const [showImportConfirm, setShowImportConfirm] = useState<"file" | "drive" | null>(null);
   const [importConfirmHasLocalData, setImportConfirmHasLocalData] = useState(false);
 
-  // ── GDocs state ───────────────────────────────────────────
-  const [gdocsExporting, setGdocsExporting] = useState(false);
-  const [gdocsImporting, setGdocsImporting] = useState(false);
-  const [gdocsResult, setGdocsResult] = useState<{ ok: boolean; message: string } | null>(null);
+  // ── Drive state ───────────────────────────────────────────
+  const [driveExporting, setDriveExporting] = useState(false);
+  const [driveImporting, setDriveImporting] = useState(false);
+  const [driveResult, setDriveResult] = useState<{ ok: boolean; message: string } | null>(null);
+  // Set when "Back up now" finds a Drive backup this device didn't write
+  // or restore (e.g. one from another device) — overwriting it needs an
+  // explicit confirm, since there is only ever one copy.
+  const [pendingOverwrite, setPendingOverwrite] = useState<{ token: string; fileId: string; modifiedTime: string } | null>(null);
+  // Arrived here right after sign-in on an account that backs up to Drive.
+  const [showRestoreHint, setShowRestoreHint] = useState(!!autoRestorePrompt);
 
   // ── Populate form from Dexie ──────────────────────────────
   useEffect(() => {
     if (!existingConfig || initialized) return;
     setForm({
       encryptionPassphrase: existingConfig.encryptionPassphrase,
-      gdocsEnabled: existingConfig.gdocsEnabled,
-      gdocsDocId: existingConfig.gdocsDocId,
+      driveBackupEnabled: existingConfig.driveBackupEnabled,
     });
     setInitialized(true);
   }, [existingConfig, initialized]);
 
-  // ── Cold-start remote fallback ─────────────────────────────
-  // Settings normally pulls these fields down from Firestore right after
-  // sign-in. But Backup is now reachable without ever opening Settings —
-  // e.g. a returning user, already signed in from a previous session, who
-  // taps the Backup icon directly on a device that's never synced. Catch
-  // that one gap: if we're signed in and have nothing locally, try once.
-  const remoteCheckedRef = useRef(false);
+  // Load Google's sign-in script up front, so the consent popup opens
+  // straight from the button tap rather than after a network round-trip
+  // (which some browsers treat as no longer user-initiated and block).
   useEffect(() => {
-    if (!user || !initialized || remoteCheckedRef.current) return;
-    remoteCheckedRef.current = true;
-    if (form.encryptionPassphrase.trim() || form.gdocsDocId.trim()) return;
-    void (async () => {
-      try {
-        const remote = await loadRemoteSettings(user.uid);
-        if (Object.keys(remote).length === 0) return;
-        await saveConfig(remote);
-        setForm((f) => ({
-          encryptionPassphrase: remote.encryptionPassphrase ?? f.encryptionPassphrase,
-          gdocsEnabled: remote.gdocsEnabled ?? f.gdocsEnabled,
-          gdocsDocId: remote.gdocsDocId ?? f.gdocsDocId,
-        }));
-      } catch (err) {
-        console.error("Remote backup settings fallback sync failed:", err);
-      }
-    })();
-    // form.* deliberately omitted: this is a one-shot check (remoteCheckedRef),
-    // not something that should re-run as the user edits the form.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, initialized]);
+    if (form.driveBackupEnabled && isDriveConfigured()) preloadGoogleSignIn();
+  }, [form.driveBackupEnabled]);
 
-  // ── Auto-trigger the restore prompt right after sign-in ────
-  const autoPromptHandledRef = useRef(false);
+  // ── Restore prompt right after sign-in ─────────────────────
+  // The passphrase isn't synced, so we can't restore automatically —
+  // prompt the user to type it and tap "Restore from Drive".
   useEffect(() => {
-    if (!autoRestorePrompt || !initialized || autoPromptHandledRef.current) return;
-    autoPromptHandledRef.current = true;
-    onAutoRestorePromptHandled?.();
-    if (form.gdocsDocId.trim() && form.encryptionPassphrase.trim() && isGoogleUser) {
-      void openImportConfirm("gdocs");
-    }
+    if (autoRestorePrompt) onAutoRestorePromptHandled?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoRestorePrompt, initialized, form.gdocsDocId, form.encryptionPassphrase, isGoogleUser]);
+  }, [autoRestorePrompt]);
 
   const set = useCallback(<K extends keyof FormState>(field: K, value: FormState[K]) => {
     setForm((f) => ({ ...f, [field]: value }));
@@ -179,13 +161,13 @@ export function BackupScreen({
   async function handleSave() {
     setSaving(true);
     try {
-      const config = {
+      // The passphrase stays on this device; only the (non-sensitive)
+      // on/off switch is synced, so a new device knows to offer a restore.
+      await saveConfig({
         encryptionPassphrase: form.encryptionPassphrase,
-        gdocsEnabled: form.gdocsEnabled,
-        gdocsDocId: form.gdocsDocId.trim(),
-      };
-      await saveConfig(config);
-      if (user) await saveRemoteSettings(user.uid, config);
+        driveBackupEnabled: form.driveBackupEnabled,
+      });
+      if (user) await saveRemoteSettings(user.uid, { driveBackupEnabled: form.driveBackupEnabled });
       setToastVisible(true);
       setTimeout(() => { setToastVisible(false); onClose?.(); }, 900);
     } catch (err) {
@@ -196,9 +178,9 @@ export function BackupScreen({
     }
   }
 
-  // ── Import confirm (shared by file + GDocs) ────────────────
+  // ── Import confirm (shared by file + Drive) ────────────────
 
-  async function openImportConfirm(kind: "file" | "gdocs") {
+  async function openImportConfirm(kind: "file" | "drive") {
     setImportConfirmHasLocalData(await hasAnyLocalData());
     setShowImportConfirm(kind);
   }
@@ -224,18 +206,25 @@ export function BackupScreen({
         setImportResult({ ok: false, message: err instanceof Error ? err.message : "Import failed." });
       } finally { setImporting(false); }
 
-    } else if (kind === "gdocs") {
-      const docId = form.gdocsDocId.trim();
-      if (!docId) return;
-      setGdocsImporting(true); setGdocsResult(null);
+    } else if (kind === "drive") {
+      setDriveImporting(true); setDriveResult(null);
       try {
-        const token = await requestDriveToken();
-        const encryptedText = await readLatestFromGoogleDoc(docId, token);
+        const token = await getDriveToken();
+        const file = await findBackupFile(token);
+        if (!file) {
+          setDriveResult({ ok: false, message: "No Slate backup found in this Google account's Drive." });
+          return;
+        }
+        const encryptedText = await readBackupFile(token, file.id);
         const c = await importFromEncryptedString(encryptedText, form.encryptionPassphrase, mode);
-        setGdocsResult({ ok: true, message: describeImport(mode, c) });
+        // This device now holds that backup, so later backups from here
+        // may overwrite it without the "another device" warning.
+        await saveConfig({ driveFileId: file.id });
+        setShowRestoreHint(false);
+        setDriveResult({ ok: true, message: describeImport(mode, c) });
       } catch (err) {
-        setGdocsResult({ ok: false, message: err instanceof Error ? err.message : "Restore failed." });
-      } finally { setGdocsImporting(false); }
+        setDriveResult({ ok: false, message: err instanceof Error ? err.message : "Restore failed." });
+      } finally { setDriveImporting(false); }
     }
   }
 
@@ -262,45 +251,53 @@ export function BackupScreen({
     void openImportConfirm("file");
   }
 
-  // ── GDocs export / import ─────────────────────────────────
-  async function handleGdocsExport() {
-    if (!form.encryptionPassphrase.trim()) { alert("Please set an encryption passphrase before exporting."); return; }
-    setGdocsExporting(true); setGdocsResult(null);
+  // ── Drive export / import ─────────────────────────────────
+  async function handleDriveExport() {
+    if (!form.encryptionPassphrase.trim()) { alert("Please set an encryption passphrase before backing up."); return; }
+    setDriveExporting(true); setDriveResult(null); setPendingOverwrite(null);
     try {
-      const token = await requestDriveToken();
-
-      // Use the silently-stored backup Doc, or auto-create one the very
-      // first time. Slate keeps exactly one "Slate Backup" Doc per Google
-      // account; its ID lives in settings and syncs across devices.
-      let docId = form.gdocsDocId.trim();
-      if (!docId) {
-        docId = await createBackupDoc(token);
-        set("gdocsDocId", docId);
-        await saveConfig({ gdocsDocId: docId });
-        if (user) await saveRemoteSettings(user.uid, { gdocsDocId: docId });
+      const token = await getDriveToken();
+      const existing = await findBackupFile(token);
+      const config = await getConfig();
+      if (existing && existing.id !== config.driveFileId) {
+        // A backup is already in Drive that this device didn't write or
+        // restore. Overwriting it could lose another device's data.
+        setPendingOverwrite({ token, fileId: existing.id, modifiedTime: existing.modifiedTime });
+        return;
       }
-
-      const encrypted = await buildEncryptedPayload(form.encryptionPassphrase);
-      await appendToGoogleDoc(docId, encrypted, token);
-      setGdocsResult({ ok: true, message: "Backed up to Google Drive successfully." });
+      await uploadBackup(token, existing?.id ?? null);
     } catch (err) {
-      setGdocsResult({ ok: false, message: err instanceof Error ? err.message : "Export failed." });
-    } finally { setGdocsExporting(false); }
+      setDriveResult({ ok: false, message: err instanceof Error ? err.message : "Backup failed." });
+    } finally { setDriveExporting(false); }
   }
 
-  function handleGdocsImport() {
-    const docId = form.gdocsDocId.trim();
-    if (!docId) {
-      setGdocsResult({ ok: false, message: "No backup found for this account. Back up from another device first, then sign in here to restore." });
-      return;
-    }
+  async function confirmOverwrite() {
+    const pending = pendingOverwrite;
+    setPendingOverwrite(null);
+    if (!pending) return;
+    setDriveExporting(true); setDriveResult(null);
+    try {
+      await uploadBackup(pending.token, pending.fileId);
+    } catch (err) {
+      setDriveResult({ ok: false, message: err instanceof Error ? err.message : "Backup failed." });
+    } finally { setDriveExporting(false); }
+  }
+
+  async function uploadBackup(token: string, fileId: string | null) {
+    const encrypted = await buildEncryptedPayload(form.encryptionPassphrase);
+    const file = await writeBackupFile(token, encrypted, fileId);
+    await saveConfig({ driveFileId: file.id });
+    setDriveResult({ ok: true, message: "Backed up to Google Drive." });
+  }
+
+  function handleDriveImport() {
     if (!form.encryptionPassphrase.trim()) { alert("Please enter your encryption passphrase first."); return; }
-    setGdocsResult(null);
-    void openImportConfirm("gdocs");
+    setDriveResult(null); setPendingOverwrite(null);
+    void openImportConfirm("drive");
   }
 
   // ── Derived ───────────────────────────────────────────────
-  const gdocsBusy = gdocsExporting || gdocsImporting;
+  const driveBusy = driveExporting || driveImporting;
 
   // ── Render ────────────────────────────────────────────────
   return (
@@ -338,8 +335,9 @@ export function BackupScreen({
               </button>
             </div>
             <span className="form-hint">
-              Encrypts and decrypts every backup below — both the file and the cloud copy. Stored in
-              your Slate account so it is restored automatically on any device you sign in to.
+              Encrypts and decrypts every backup below — both the file and the Google Drive copy.
+              Stored on this device only, never in your Slate account: you'll need to type it on
+              each new device, and if you forget it your backups can't be recovered.
             </span>
           </div>
         </section>
@@ -380,67 +378,80 @@ export function BackupScreen({
               <span className="toggle-label">
                 Back up to Google Drive
                 <span className="toggle-label-sub">
-                  Appends an encrypted copy to a private “Slate Backup” Google Doc
+                  Keeps one encrypted backup file in your own Google Drive
                 </span>
               </span>
-              <button className="toggle-track" role="switch" aria-checked={form.gdocsEnabled}
+              <button className="toggle-track" role="switch" aria-checked={form.driveBackupEnabled}
                 aria-label="Back up to Google Drive"
                 onClick={() => {
-                  if (form.gdocsEnabled) { set("gdocsEnabled", false); }
-                  else { setShowGdocsWarning(true); }
+                  if (form.driveBackupEnabled) {
+                    set("driveBackupEnabled", false);
+                    setPendingOverwrite(null);
+                    void revokeDriveToken();
+                  } else { setShowDriveWarning(true); }
                 }}>
                 <span className="toggle-thumb" />
               </button>
             </div>
           </div>
 
-          {showGdocsWarning && (
+          {showDriveWarning && (
             <div className="ai-warning" role="alert" aria-live="polite">
               <p className="ai-warning-title"><AlertTriangle size={16} aria-hidden /> Privacy notice</p>
               <p>
-                This writes an <strong>encrypted</strong> copy of your patient data to a Google Doc in your
-                own Google Drive. Your data is encrypted with your passphrase before it leaves this app —
-                Google cannot read it.
+                This stores an <strong>encrypted</strong> copy of your patient data in your own Google
+                Drive. It is encrypted on this device with your passphrase before it is sent, and the
+                passphrase never leaves this device — neither Google nor Slate can read the backup.
               </p>
               <p>
-                Slate creates a single private <strong>“Slate Backup”</strong> document the first time you
-                back up, and only ever touches that one document. No other files in your Drive are accessed.
+                Google will ask you to let Slate access its own files in your Drive. Slate can only
+                see the one backup file it creates (<strong>slate-backup.slate</strong>), never the
+                rest of your Drive. Each backup replaces the previous one.
               </p>
               <div className="ai-warning-actions">
-                <button className="btn btn-secondary" onClick={() => setShowGdocsWarning(false)}>Cancel</button>
-                <button className="btn btn-primary" onClick={() => { setShowGdocsWarning(false); set("gdocsEnabled", true); }}>
+                <button className="btn btn-secondary" onClick={() => setShowDriveWarning(false)}>Cancel</button>
+                <button className="btn btn-primary" onClick={() => { setShowDriveWarning(false); set("driveBackupEnabled", true); }}>
                   <Check size={14} aria-hidden /> I understand, enable
                 </button>
               </div>
             </div>
           )}
 
-          {form.gdocsEnabled && !showGdocsWarning && (
+          {form.driveBackupEnabled && !showDriveWarning && (
             <div>
-              {!isGoogleUser && (
+              {!isDriveConfigured() && (
                 <div className="gdocs-notice" role="status">
                   <AlertTriangle size={14} aria-hidden />
-                  <span>Sign in with Google (in Settings) to use cloud backup.</span>
+                  <span>Google Drive backup isn't set up in this version of Slate.</span>
                 </div>
               )}
 
-              {isGoogleUser && (
+              {isDriveConfigured() && (
                 <div className="form-section-body" style={{ paddingTop: "0.5rem" }}>
+                  {showRestoreHint && (
+                    <div className="gdocs-notice" role="status" style={{ marginBottom: "0.5rem" }}>
+                      <AlertTriangle size={14} aria-hidden />
+                      <span>
+                        This account backs up to Google Drive. To restore on this device, enter your
+                        passphrase above, then tap Restore from Drive.
+                      </span>
+                    </div>
+                  )}
                   <div className="data-action-buttons">
                     <button className="btn btn-secondary data-btn"
-                      onClick={handleGdocsExport} disabled={gdocsBusy || !!showImportConfirm}>
+                      onClick={handleDriveExport} disabled={driveBusy || !!showImportConfirm || !!pendingOverwrite}>
                       <Download size={14} aria-hidden />
-                      {gdocsExporting ? "Backing up…" : "Backup now"}
+                      {driveExporting ? "Backing up…" : "Backup now"}
                     </button>
                     <button className="btn btn-secondary data-btn"
-                      onClick={handleGdocsImport} disabled={gdocsBusy || !!showImportConfirm}>
+                      onClick={handleDriveImport} disabled={driveBusy || !!showImportConfirm || !!pendingOverwrite}>
                       <Upload size={14} aria-hidden />
-                      {gdocsImporting ? "Restoring…" : "Restore from Drive"}
+                      {driveImporting ? "Restoring…" : "Restore from Drive"}
                     </button>
                   </div>
-                  {gdocsResult && (
-                    <p className={gdocsResult.ok ? "data-import-ok" : "auth-error"} style={{ marginTop: "0.5rem" }}>
-                      {gdocsResult.message}
+                  {driveResult && (
+                    <p className={driveResult.ok ? "data-import-ok" : "auth-error"} style={{ marginTop: "0.5rem" }}>
+                      {driveResult.message}
                     </p>
                   )}
                 </div>
@@ -449,7 +460,24 @@ export function BackupScreen({
           )}
         </section>
 
-        {/* ── Replace vs merge confirm — shared by file + GDocs import ── */}
+        {/* ── Overwrite confirm — a Drive backup this device didn't write ── */}
+        {pendingOverwrite && (
+          <div className="ai-warning" role="alert" aria-live="polite" style={{ margin: "0 16px" }}>
+            <p className="ai-warning-title"><AlertTriangle size={16} aria-hidden /> Replace the backup in Google Drive?</p>
+            <p>
+              Your Drive already has a Slate backup from {new Date(pendingOverwrite.modifiedTime).toLocaleString()} that
+              wasn't made or restored on this device. Backing up now <strong>replaces it</strong> with
+              only what's on this device. To keep its records, cancel and use Restore from Drive
+              (choose Merge) first.
+            </p>
+            <div className="ai-warning-actions">
+              <button className="btn btn-secondary" onClick={() => setPendingOverwrite(null)}>Cancel</button>
+              <button className="btn btn-danger" onClick={() => void confirmOverwrite()}>Replace</button>
+            </div>
+          </div>
+        )}
+
+        {/* ── Replace vs merge confirm — shared by file + Drive import ── */}
         {showImportConfirm && (
           <div className="ai-warning" role="alert" aria-live="polite" style={{ margin: "0 16px" }}>
             {importConfirmHasLocalData ? (
