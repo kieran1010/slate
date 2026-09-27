@@ -59,13 +59,6 @@ jobs:
 
       - name: Build
         run: npm run build
-        env:
-          # Google OAuth client ID for the Google Drive backup (see
-          # src/utils/googleDrive.ts). Set it under Settings → Secrets and
-          # variables → Actions → Variables. A client ID is public by
-          # design, so it ships in the bundle — use a variable, not a
-          # secret. Unset, the Drive backup shows as unavailable.
-          VITE_GOOGLE_CLIENT_ID: ${{ vars.VITE_GOOGLE_CLIENT_ID }}
         # Vite outputs to dist/. The build also generates the
         # service worker (sw.js) and workbox bundle automatically.
 

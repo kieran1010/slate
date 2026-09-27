@@ -12,10 +12,10 @@
 //   restores, never at sign-in.
 //
 // CLIENT ID:
-//   VITE_GOOGLE_CLIENT_ID, baked in at build time from the
-//   GitHub Actions variable of the same name (deploy.yml). A
-//   Google OAuth client ID is public by design, so shipping it
-//   in the bundle is safe.
+//   Entered by the user on the Backup screen (their own Google
+//   Cloud OAuth client) and kept in AppConfig.googleClientId.
+//   Nothing is built into the app. A client ID is public by
+//   design, so it isn't treated as a secret.
 //
 // SCOPE:  drive.file
 //   Slate can only see files it created itself, never the rest
@@ -42,10 +42,29 @@ const UPLOAD_API = "https://www.googleapis.com/upload/drive/v3/files";
 
 export const BACKUP_FILENAME = "slate-backup.slate";
 
-const CLIENT_ID = (import.meta.env.VITE_GOOGLE_CLIENT_ID ?? "").replace(/\s+/g, "");
+// e.g. 296555094518-ek78l30etraoao6fu8536e2vasgds9ap.apps.googleusercontent.com
+const CLIENT_ID_PATTERN = /^\d+-[a-z0-9_-]+\.apps\.googleusercontent\.com$/i;
 
-export function isDriveConfigured(): boolean {
-  return !!CLIENT_ID;
+// Pasting on a phone routinely picks up spaces or a line break, so strip
+// whitespace anywhere in the string, not just at the ends.
+export function normaliseClientId(value: string): string {
+  return (value || "").replace(/\s+/g, "");
+}
+
+/**
+ * Describes what's wrong with a client ID, or returns null if it looks
+ * usable. Catching this locally avoids Google's opaque "invalid_client" page.
+ */
+export function clientIdProblem(value: string): string | null {
+  const id = normaliseClientId(value);
+  if (!id) return "Enter your Google OAuth client ID first.";
+  if (/^GOCSPX-/.test(id)) {
+    return "That is the client secret, not the client ID. Copy the Client ID instead — it ends in .apps.googleusercontent.com";
+  }
+  if (!CLIENT_ID_PATTERN.test(id)) {
+    return "That doesn't look like a Google client ID. It should end in .apps.googleusercontent.com — check nothing was cut off when pasting.";
+  }
+  return null;
 }
 
 // ── Google Identity Services (minimal typings) ────────────────
@@ -113,10 +132,12 @@ export function preloadGoogleSignIn(): void {
 
 let cachedToken: string | null = null;
 let cachedExpiry = 0;
+let cachedClientId = "";
 
 function forgetToken(): void {
   cachedToken = null;
   cachedExpiry = 0;
+  cachedClientId = "";
 }
 
 /**
@@ -124,16 +145,16 @@ function forgetToken(): void {
  * the first time (or when the cached token has expired). Must be
  * called from a user gesture so the popup isn't blocked.
  */
-export async function getDriveToken(): Promise<string> {
-  if (!CLIENT_ID) {
-    throw new Error("Google Drive backup isn't set up in this build of Slate.");
-  }
-  if (cachedToken && Date.now() < cachedExpiry) return cachedToken;
+export async function getDriveToken(rawClientId: string): Promise<string> {
+  const problem = clientIdProblem(rawClientId);
+  if (problem) throw new Error(problem);
+  const clientId = normaliseClientId(rawClientId);
+  if (cachedToken && clientId === cachedClientId && Date.now() < cachedExpiry) return cachedToken;
 
   const oauth2 = await loadGis();
   return new Promise((resolve, reject) => {
     const client = oauth2.initTokenClient({
-      client_id: CLIENT_ID,
+      client_id: clientId,
       scope: DRIVE_SCOPE,
       prompt: "",
       callback: (response) => {
@@ -142,6 +163,7 @@ export async function getDriveToken(): Promise<string> {
           return;
         }
         cachedToken = response.access_token;
+        cachedClientId = clientId;
         // Expire a minute early so a request never starts on a dying token.
         cachedExpiry = Date.now() + (Number(response.expires_in) || 3600) * 1000 - 60_000;
         resolve(cachedToken);
