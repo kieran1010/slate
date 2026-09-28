@@ -7,9 +7,8 @@
 //
 // AUTH:
 //   Google Identity Services token client, talking to Google
-//   directly — independent of the Firebase sign-in. Slate asks
-//   for Drive access only when the user first backs up or
-//   restores, never at sign-in.
+//   directly (Slate has no account of its own). Slate asks for
+//   Drive access only when the user first backs up or restores.
 //
 // CLIENT ID:
 //   Built in at build time from the VITE_GOOGLE_CLIENT_ID GitHub
