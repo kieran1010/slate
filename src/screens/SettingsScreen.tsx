@@ -35,7 +35,7 @@ import { loadRemoteSettings, saveRemoteSettings } from "../data/firebaseSync";
 import { DEFAULT_APP_CONFIG } from "../data/models";
 import { useAuth } from "../hooks/useAuth";
 import { exportCsv } from "../utils/exportImport";
-import { GDOCS_SCOPE, cacheDriveToken } from "../utils/gdocs";
+import { revokeDriveToken } from "../utils/googleDrive";
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -56,8 +56,8 @@ interface SettingsScreenProps {
   // recreate a fresh profile and reset the UI without a page reload.
   onSignedOut?: () => void;
   // Called after a fresh sign-in (not a routine Settings re-open) once
-  // settings have synced and an existing backup was found for the
-  // account. App opens the Backup screen so the user can restore it.
+  // settings have synced and the account has Google Drive backup
+  // switched on. App opens the Backup screen so the user can restore.
   onBackupFound?: () => void;
 }
 
@@ -144,9 +144,9 @@ export function SettingsScreen({ onClose, onSignedOut, onBackupFound }: Settings
   // open while already signed in. Gates the auto-save/close/backup-lookup
   // sequence below to "right after logging in", as intended.
   const justSignedInRef = useRef(false);
-  // Carries a found backup's doc id from the sync below through to
-  // handleSave's post-close step (see handleSave).
-  const pendingBackupDocIdRef = useRef<string | null>(null);
+  // Carries "this account backs up to Drive" from the sync below through
+  // to handleSave's post-close step (see handleSave).
+  const pendingBackupFoundRef = useRef(false);
 
   useEffect(() => {
     if (!user || hasSyncedRef.current) return;
@@ -154,7 +154,7 @@ export function SettingsScreen({ onClose, onSignedOut, onBackupFound }: Settings
     const freshSignIn = justSignedInRef.current;
     justSignedInRef.current = false;
     void (async () => {
-      let foundDocId: string | null = null;
+      let backupEnabled = false;
       try {
         const remote = await loadRemoteSettings(user.uid);
         if (Object.keys(remote).length > 0) {
@@ -171,11 +171,10 @@ export function SettingsScreen({ onClose, onSignedOut, onBackupFound }: Settings
             aiEnabled:            merged.aiEnabled,
             anthropicApiKey:      merged.anthropicApiKey,
           });
-          // Backup settings (passphrase/gdocsDocId) live on BackupScreen
-          // now, but they're still part of AppConfig and were just
-          // persisted to Dexie above — we only need the doc id here, to
-          // know whether an existing backup is worth surfacing below.
-          foundDocId = merged.gdocsDocId || null;
+          // Backup settings live on BackupScreen; we only need to know
+          // whether this account uses Drive backup, to surface it below.
+          // (The passphrase is never synced — the user types it.)
+          backupEnabled = merged.driveBackupEnabled;
         }
       } catch (err) {
         // Fail silently — e.g. offline. Local data is unaffected.
@@ -185,9 +184,9 @@ export function SettingsScreen({ onClose, onSignedOut, onBackupFound }: Settings
       if (!freshSignIn) return;
       // Right after an interactive sign-in: save and close automatically
       // (the user asked to sign in, not to fill in this form), and if the
-      // account already has a backup on file, hand off to Backup so they
-      // can choose whether to restore it.
-      pendingBackupDocIdRef.current = foundDocId;
+      // account backs up to Drive, hand off to Backup so they can choose
+      // whether to restore it.
+      pendingBackupFoundRef.current = backupEnabled;
       void handleSave();
     })();
     // handleSave deliberately omitted: it closes over `form`, which would
@@ -238,9 +237,9 @@ export function SettingsScreen({ onClose, onSignedOut, onBackupFound }: Settings
         setToastVisible(false);
         onClose?.();
         // If a sign-in just found an existing backup, hand off to Backup.
-        const foundDocId = pendingBackupDocIdRef.current;
-        pendingBackupDocIdRef.current = null;
-        if (foundDocId) onBackupFound?.();
+        const backupFound = pendingBackupFoundRef.current;
+        pendingBackupFoundRef.current = false;
+        if (backupFound) onBackupFound?.();
       }, 900);
     } catch (err) {
       console.error("Settings save failed:", err);
@@ -254,14 +253,10 @@ export function SettingsScreen({ onClose, onSignedOut, onBackupFound }: Settings
   async function handleGoogleSignIn() {
     setAuthWorking(true); setAuthError("");
     try {
-      // Request Drive/Docs access in the same consent screen as sign-in,
-      // rather than waiting until the user first opens Backup — one
-      // popup covers everything instead of two.
-      const provider = new GoogleAuthProvider();
-      provider.addScope(GDOCS_SCOPE);
-      const result = await signInWithPopup(firebaseAuth, provider);
-      const credential = GoogleAuthProvider.credentialFromResult(result);
-      if (credential?.accessToken) cacheDriveToken(credential.accessToken);
+      // Sign-in only — no Drive permission here. Drive access is asked
+      // for separately, only when the user first backs up or restores
+      // (utils/googleDrive.ts).
+      await signInWithPopup(firebaseAuth, new GoogleAuthProvider());
       hasSyncedRef.current = false;
       justSignedInRef.current = true;
     } catch (err) { setAuthError(firebaseErrorMessage(err)); }
@@ -277,6 +272,7 @@ export function SettingsScreen({ onClose, onSignedOut, onBackupFound }: Settings
       // produced the blank-screen-needing-refresh behaviour.
       await signOut(firebaseAuth);
       await clearAllLocalData();
+      await revokeDriveToken();
       onSignedOut?.();
     } catch (err) {
       console.error(err);
@@ -291,6 +287,7 @@ export function SettingsScreen({ onClose, onSignedOut, onBackupFound }: Settings
       // wipe local data, then let App re-init reactively.
       await deleteUser(currentUser);
       await clearAllLocalData();
+      await revokeDriveToken();
       onSignedOut?.();
     } catch (err) {
       setDeleteWorking(false); setShowDeleteConfirm(false);

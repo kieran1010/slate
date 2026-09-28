@@ -277,7 +277,7 @@ export interface DischargeToFollowUpRequest {
 // anthropicApiKey is opt-in (user-supplied), stored locally only
 // and never sent to any Hypnos Medical server.
 // webhookUrl and googleDocId (old Sheets backend) have been removed.
-// Cloud sync and GDocs integration are handled separately.
+// Cloud sync and Google Drive backup are handled separately.
 export interface AppConfig {
   clinicianName: string;
   clinicianRole: string;
@@ -289,20 +289,23 @@ export interface AppConfig {
   // temporarily disabled, and the user doesn't have to re-enter it.
   aiEnabled: boolean;
   // Passphrase for AES-256-GCM encrypted backup / restore.
-  // Stored in Firestore so it is restored automatically when the user
-  // signs in on a new device, allowing import without needing to
-  // remember the passphrase. Security note: anyone who gains access to
-  // the user's Slate account also gains this passphrase — acceptable
-  // because patient data never leaves the device unencrypted.
+  // LOCAL ONLY — never synced to Firestore (see LOCAL_ONLY_CONFIG_FIELDS).
+  // Keeping it off the server means someone who gets into the user's
+  // Google account can't decrypt their Drive backup. The trade-off: it
+  // must be typed on each new device, and a lost passphrase can't be
+  // recovered.
   encryptionPassphrase: string;
-  // GDocs Integration — optional, warning-gated.
-  // Stores an encrypted backup in a Google Doc the user owns.
-  gdocsEnabled: boolean;
-  // ID of the Google Doc used for backup (auto-created on first export
-  // if left blank). Stored in Firestore so it is available on any
-  // device the user signs into.
-  gdocsDocId: string;
+  // Google Drive backup — optional, warning-gated. Synced (not
+  // sensitive) so a fresh sign-in on a new device knows to offer a restore.
+  driveBackupEnabled: boolean;
+  // Drive file ID of the backup this device last wrote or restored.
+  // LOCAL ONLY. Empty means this device hasn't used the Drive backup
+  // yet, which is what triggers the overwrite warning in BackupScreen.
+  driveFileId: string;
 }
+
+// AppConfig fields that must never leave the device.
+export const LOCAL_ONLY_CONFIG_FIELDS = ["encryptionPassphrase", "driveFileId"] as const;
 
 // Sensible defaults, equivalent to the Kotlin default arguments.
 export const DEFAULT_APP_CONFIG: AppConfig = {
@@ -313,8 +316,8 @@ export const DEFAULT_APP_CONFIG: AppConfig = {
   anthropicApiKey: "",
   aiEnabled: false,
   encryptionPassphrase: "",
-  gdocsEnabled: false,
-  gdocsDocId: "",
+  driveBackupEnabled: false,
+  driveFileId: "",
 };
 
 // ============================================================
