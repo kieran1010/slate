@@ -5,9 +5,10 @@
 //
 //   ENCRYPTED BACKUP (.slate)
 //     All clinical data → JSON → AES-256-GCM encrypted →
-//     base64 text file. The passphrase is stored on this device
-//     only (never in Firestore), so the user must enter it to
-//     import on a new device.
+//     base64 text file. Also carries the user's settings
+//     (BACKUP_SETTINGS_FIELDS, incl. the Anthropic API key), which
+//     a Replace import restores. The passphrase is stored on this
+//     device only, so the user must enter it on a new device.
 //
 //   CSV ZIP (.zip)
 //     Three CSVs (acute, pre-assessment, follow-up) including
@@ -21,6 +22,8 @@
 import JSZip from "jszip";
 import { encryptPayload, decryptPayload } from "./crypto";
 import {
+  getConfig,
+  saveConfig,
   listPatients,
   listAllAcute,
   listAllPreAssess,
@@ -30,7 +33,12 @@ import {
   type ImportMode,
 } from "../data/repository";
 import type { StoredAcute, StoredPreAssess, StoredFollowUp } from "../data/db";
-import type { Patient } from "../data/models";
+import {
+  BACKUP_SETTINGS_FIELDS,
+  DEFAULT_APP_CONFIG,
+  type BackupSettings,
+  type Patient,
+} from "../data/models";
 
 // ── Helpers ──────────────────────────────────────────────────
 
@@ -143,12 +151,18 @@ function followUpToCsv(
 export async function buildEncryptedPayload(
   passphrase: string
 ): Promise<string> {
-  const [patients, acute, preAssess, followUp] = await Promise.all([
+  const [patients, acute, preAssess, followUp, config] = await Promise.all([
     listPatients(),
     listAllAcute(),
     listAllPreAssess(),
     listAllFollowUp(),
+    getConfig(),
   ]);
+
+  const settings: Partial<BackupSettings> = {};
+  for (const field of BACKUP_SETTINGS_FIELDS) {
+    (settings as Record<string, unknown>)[field] = config[field];
+  }
 
   const payload: ImportPayload = {
     version: 1,
@@ -157,6 +171,7 @@ export async function buildEncryptedPayload(
     acute: acute.map(({ profileId: _p, id: _i, ...r }) => r),
     preAssess: preAssess.map(({ profileId: _p, id: _i, ...r }) => r),
     followUp: followUp.map(({ profileId: _p, id: _i, ...r }) => r),
+    settings,
   };
 
   return encryptPayload(JSON.stringify(payload), passphrase);
@@ -178,6 +193,22 @@ export interface ImportResultCounts {
   acute: ModuleImportCounts;
   preAssess: ModuleImportCounts;
   followUp: ModuleImportCounts;
+  // True when the backup carried settings and they were applied.
+  settingsRestored: boolean;
+}
+
+/**
+ * Picks the backup's settings, keeping only known fields whose type
+ * matches the default (anything else is ignored rather than trusted).
+ */
+function validBackupSettings(raw: unknown): Partial<BackupSettings> {
+  const out: Record<string, unknown> = {};
+  if (raw === null || typeof raw !== "object") return out;
+  for (const field of BACKUP_SETTINGS_FIELDS) {
+    const value = (raw as Record<string, unknown>)[field];
+    if (typeof value === typeof DEFAULT_APP_CONFIG[field]) out[field] = value;
+  }
+  return out as Partial<BackupSettings>;
 }
 
 function countByLifecycle(records: { archived: 0 | 1 }[]): ModuleImportCounts {
@@ -212,11 +243,18 @@ export async function importFromEncryptedString(
 
   await importData(payload, mode);
 
+  // Replace restores the backup's settings too (e.g. setting up a new
+  // device); Merge keeps this device's own settings.
+  const settings = mode === "replace" ? validBackupSettings(payload.settings) : {};
+  const settingsRestored = Object.keys(settings).length > 0;
+  if (settingsRestored) await saveConfig(settings);
+
   return {
     patients: payload.patients.length,
     acute: countByLifecycle(payload.acute),
     preAssess: countByLifecycle(payload.preAssess),
     followUp: countByLifecycle(payload.followUp),
+    settingsRestored,
   };
 }
 

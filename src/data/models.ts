@@ -274,8 +274,10 @@ export interface DischargeToFollowUpRequest {
 // The app's settings. On Android this mirrored a Config sheet;
 // in the PWA it will live in local storage, per profile.
 //
-// anthropicApiKey is opt-in (user-supplied), stored locally only
-// and never sent to any Hypnos Medical server.
+// There is no account or server: config lives on this device, and the
+// BACKUP_SETTINGS_FIELDS below travel inside the encrypted backup.
+// anthropicApiKey is opt-in (user-supplied) and never sent to Hypnos
+// Medical.
 // webhookUrl and googleDocId (old Sheets backend) have been removed.
 // Cloud sync and Google Drive backup are handled separately.
 export interface AppConfig {
@@ -288,24 +290,32 @@ export interface AppConfig {
   // Stored separately from the key so the key is preserved when AI is
   // temporarily disabled, and the user doesn't have to re-enter it.
   aiEnabled: boolean;
-  // Passphrase for AES-256-GCM encrypted backup / restore.
-  // LOCAL ONLY — never synced to Firestore (see LOCAL_ONLY_CONFIG_FIELDS).
-  // Keeping it off the server means someone who gets into the user's
-  // Google account can't decrypt their Drive backup. The trade-off: it
-  // must be typed on each new device, and a lost passphrase can't be
-  // recovered.
+  // Passphrase for AES-256-GCM encrypted backup / restore. Stored on
+  // this device only and never put in the backup itself, so someone who
+  // gets into the user's Google account can't decrypt their Drive backup.
+  // The trade-off: it must be typed on each new device, and a lost
+  // passphrase can't be recovered.
   encryptionPassphrase: string;
-  // Google Drive backup — optional, warning-gated. Synced (not
-  // sensitive) so a fresh sign-in on a new device knows to offer a restore.
+  // Google Drive backup — optional, warning-gated.
   driveBackupEnabled: boolean;
   // Drive file ID of the backup this device last wrote or restored.
-  // LOCAL ONLY. Empty means this device hasn't used the Drive backup
+  // Empty means this device hasn't used the Drive backup
   // yet, which is what triggers the overwrite warning in BackupScreen.
   driveFileId: string;
 }
 
-// AppConfig fields that must never leave the device.
-export const LOCAL_ONLY_CONFIG_FIELDS = ["encryptionPassphrase", "driveFileId"] as const;
+// Settings carried inside the encrypted backup, so restoring on a new
+// device brings them back. Deliberately excludes the passphrase (it
+// decrypts the backup) and per-device Drive state.
+export const BACKUP_SETTINGS_FIELDS = [
+  "clinicianName",
+  "clinicianRole",
+  "defaultFollowUpHours",
+  "notificationLeadMins",
+  "aiEnabled",
+  "anthropicApiKey",
+] as const;
+export type BackupSettings = Pick<AppConfig, (typeof BACKUP_SETTINGS_FIELDS)[number]>;
 
 // Sensible defaults, equivalent to the Kotlin default arguments.
 export const DEFAULT_APP_CONFIG: AppConfig = {

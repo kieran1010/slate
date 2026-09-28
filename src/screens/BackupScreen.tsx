@@ -11,8 +11,9 @@
 //                  Drive, overwritten on each backup. See
 //                  utils/googleDrive.ts.
 //
-// The passphrase is stored on this device only, never in Firestore,
-// so it must be typed on each new device.
+// The passphrase is stored on this device only, never in a backup,
+// so it must be typed on each new device. Backups also carry the
+// user's settings (BACKUP_SETTINGS_FIELDS), restored on Replace.
 //
 // IMPORT SAFETY: if the device already has patient data, the user
 // is asked to choose Replace (wipe local, use the backup) or Merge
@@ -27,9 +28,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { Eye, EyeOff, AlertTriangle, Check, X, Download, Upload } from "lucide-react";
 import { getConfig, saveConfig, hasAnyLocalData, type ImportMode } from "../data/repository";
-import { saveRemoteSettings } from "../data/firebaseSync";
 import { DEFAULT_APP_CONFIG } from "../data/models";
-import { useAuth } from "../hooks/useAuth";
 import {
   exportEncrypted,
   importEncrypted,
@@ -57,11 +56,6 @@ interface FormState {
 
 interface BackupScreenProps {
   onClose?: () => void;
-  // Set when this screen was opened automatically right after a Google
-  // sign-in on an account that backs up to Drive — shows a prompt to
-  // enter the passphrase and restore.
-  autoRestorePrompt?: boolean;
-  onAutoRestorePromptHandled?: () => void;
 }
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -80,7 +74,8 @@ function describeImport(mode: ImportMode, c: ImportResultCounts): string {
   return (
     `${verb} ${describeCounts("acute", c.acute)}, ` +
     `${describeCounts("pre-assessments", c.preAssess)}, ` +
-    `${describeCounts("follow-ups", c.followUp)}.`
+    `${describeCounts("follow-ups", c.followUp)}.` +
+    (c.settingsRestored ? " Settings restored." : "")
   );
 }
 
@@ -88,11 +83,10 @@ function describeImport(mode: ImportMode, c: ImportResultCounts): string {
 
 export function BackupScreen({
   onClose,
-  autoRestorePrompt,
-  onAutoRestorePromptHandled,
 }: BackupScreenProps) {
-  const { user } = useAuth();
   const existingConfig = useLiveQuery(() => getConfig(), []);
+  // Undefined while loading; false on a fresh or erased device.
+  const hasLocalData = useLiveQuery(() => hasAnyLocalData(), []);
 
   const [form, setForm] = useState<FormState>({
     encryptionPassphrase: DEFAULT_APP_CONFIG.encryptionPassphrase,
@@ -125,8 +119,6 @@ export function BackupScreen({
   // or restore (e.g. one from another device) — overwriting it needs an
   // explicit confirm, since there is only ever one copy.
   const [pendingOverwrite, setPendingOverwrite] = useState<{ token: string; fileId: string; modifiedTime: string } | null>(null);
-  // Arrived here right after sign-in on an account that backs up to Drive.
-  const [showRestoreHint, setShowRestoreHint] = useState(!!autoRestorePrompt);
 
   // ── Populate form from Dexie ──────────────────────────────
   useEffect(() => {
@@ -145,14 +137,6 @@ export function BackupScreen({
     if (form.driveBackupEnabled && isDriveConfigured()) preloadGoogleSignIn();
   }, [form.driveBackupEnabled]);
 
-  // ── Restore prompt right after sign-in ─────────────────────
-  // The passphrase isn't synced, so we can't restore automatically —
-  // prompt the user to type it and tap "Restore from Drive".
-  useEffect(() => {
-    if (autoRestorePrompt) onAutoRestorePromptHandled?.();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoRestorePrompt]);
-
   const set = useCallback(<K extends keyof FormState>(field: K, value: FormState[K]) => {
     setForm((f) => ({ ...f, [field]: value }));
   }, []);
@@ -161,13 +145,10 @@ export function BackupScreen({
   async function handleSave() {
     setSaving(true);
     try {
-      // The passphrase stays on this device; only the (non-sensitive)
-      // on/off switch is synced, so a new device knows to offer a restore.
       await saveConfig({
         encryptionPassphrase: form.encryptionPassphrase,
         driveBackupEnabled: form.driveBackupEnabled,
       });
-      if (user) await saveRemoteSettings(user.uid, { driveBackupEnabled: form.driveBackupEnabled });
       setToastVisible(true);
       setTimeout(() => { setToastVisible(false); onClose?.(); }, 900);
     } catch (err) {
@@ -220,7 +201,6 @@ export function BackupScreen({
         // This device now holds that backup, so later backups from here
         // may overwrite it without the "another device" warning.
         await saveConfig({ driveFileId: file.id });
-        setShowRestoreHint(false);
         setDriveResult({ ok: true, message: describeImport(mode, c) });
       } catch (err) {
         setDriveResult({ ok: false, message: err instanceof Error ? err.message : "Restore failed." });
@@ -317,6 +297,16 @@ export function BackupScreen({
 
       <div className="form-body">
 
+        {hasLocalData === false && (
+          <div className="gdocs-notice" role="status" style={{ margin: "0 16px 0.75rem" }}>
+            <AlertTriangle size={14} aria-hidden />
+            <span>
+              New device? Enter your passphrase below, then use Import backup for a backup file, or
+              switch on Google Drive and tap Restore from Drive. Your settings are restored too.
+            </span>
+          </div>
+        )}
+
         {/* ── Passphrase ───────────────────────────────────── */}
         <section className="form-section" aria-label="Encryption passphrase">
           <div className="form-section-title">Encryption passphrase</div>
@@ -336,7 +326,7 @@ export function BackupScreen({
             </div>
             <span className="form-hint">
               Encrypts and decrypts every backup below — both the file and the Google Drive copy.
-              Stored on this device only, never in your Slate account: you'll need to type it on
+              Stored on this device only and never included in a backup: you'll need to type it on
               each new device, and if you forget it your backups can't be recovered.
             </span>
           </div>
@@ -428,15 +418,6 @@ export function BackupScreen({
 
               {isDriveConfigured() && (
                 <div className="form-section-body" style={{ paddingTop: "0.5rem" }}>
-                  {showRestoreHint && (
-                    <div className="gdocs-notice" role="status" style={{ marginBottom: "0.5rem" }}>
-                      <AlertTriangle size={14} aria-hidden />
-                      <span>
-                        This account backs up to Google Drive. To restore on this device, enter your
-                        passphrase above, then tap Restore from Drive.
-                      </span>
-                    </div>
-                  )}
                   <div className="data-action-buttons">
                     <button className="btn btn-secondary data-btn"
                       onClick={handleDriveExport} disabled={driveBusy || !!showImportConfirm || !!pendingOverwrite}>
@@ -485,8 +466,9 @@ export function BackupScreen({
                 <p className="ai-warning-title"><AlertTriangle size={16} aria-hidden /> You already have patient data on this device</p>
                 <p>
                   <strong>Replace</strong> deletes all current acute referrals, pre-assessments, and
-                  follow-ups and swaps in the backup's contents. <strong>Merge</strong> keeps what's
-                  already here and adds the backup's records alongside it.
+                  follow-ups and swaps in the backup's contents, and restores the backup's settings
+                  (profile, defaults, AI key). <strong>Merge</strong> keeps what's already here, including
+                  this device's settings, and adds the backup's records alongside it.
                 </p>
                 <p>This cannot be undone.</p>
                 <div className="ai-warning-actions">
@@ -498,7 +480,7 @@ export function BackupScreen({
             ) : (
               <>
                 <p className="ai-warning-title"><AlertTriangle size={16} aria-hidden /> Import this backup?</p>
-                <p>This adds the backup's acute referrals, pre-assessments, and follow-ups to this device.</p>
+                <p>This adds the backup's acute referrals, pre-assessments, follow-ups and settings to this device.</p>
                 <div className="ai-warning-actions">
                   <button className="btn btn-secondary" onClick={cancelImportConfirm}>Cancel</button>
                   <button className="btn btn-primary" onClick={() => confirmImport("replace")}>Import</button>

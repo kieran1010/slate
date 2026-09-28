@@ -35,8 +35,6 @@ import { ImportScreen } from "./screens/ImportScreen";
 import { SettingsScreen } from "./screens/SettingsScreen";
 import { BackupScreen } from "./screens/BackupScreen";
 import { ensureActiveProfile } from "./data/profiles";
-import { purgeLegacyRemoteSettings } from "./data/firebaseSync";
-import { useAuth } from "./hooks/useAuth";
 import type { Profile } from "./data/db";
 import type { NavState, Tab, NavigateFn } from "./types/nav";
 
@@ -55,8 +53,8 @@ function LocalDataBanner({ onDismiss }: { onDismiss: () => void }) {
   return (
     <div className="local-data-banner" role="status" aria-live="polite">
       <p className="local-data-banner-text">
-        <strong>Data is stored locally on this device only unless you log in and manually back up.</strong>{" "}
-        Encrypted cloud backup and multi-device sync are coming in a future release.
+        <strong>Data is stored on this device only.</strong>{" "}
+        Use Backup to keep an encrypted copy in a file or your Google Drive, and to restore it on another device.
       </p>
       <button
         className="local-data-banner-dismiss"
@@ -76,16 +74,6 @@ export default function App() {
   useEffect(() => {
     ensureActiveProfile().then(setProfile).catch(console.error);
   }, []);
-
-  // ── Legacy settings cleanup ────────────────────────────────
-  // Older versions stored the backup passphrase in Firestore. Remove it
-  // (and the old Google Docs backup fields) as soon as a signed-in
-  // session starts, rather than waiting for Settings to be opened.
-  const { user } = useAuth();
-  const uid = user?.uid;
-  useEffect(() => {
-    if (uid) void purgeLegacyRemoteSettings(uid);
-  }, [uid]);
 
   // ── Navigation state ───────────────────────────────────────
   const [nav, setNav] = useState<NavState>({ tab: "pre-assess", view: "list" });
@@ -117,10 +105,6 @@ export default function App() {
   const [backupOpen, setBackupOpen] = useState(false);
   const backupOpenRef = useRef(false);
   useEffect(() => { backupOpenRef.current = backupOpen; }, [backupOpen]);
-  // Set when Settings just found an existing cloud backup right after a
-  // fresh Google sign-in — tells BackupScreen to prompt to restore it
-  // immediately instead of waiting for the user to tap "Restore from Drive".
-  const [autoRestorePrompt, setAutoRestorePrompt] = useState(false);
 
   // ── Local data warning banner ──────────────────────────────
   // Shown until the user dismisses it; dismissal is stored in
@@ -156,8 +140,8 @@ export default function App() {
       }
 
       // PRIORITY 1 — Backup open: hardware-back closes it the same way
-      // Settings does (checked first since Backup can briefly sit on top
-      // of Settings during the auto-open-after-sign-in flow).
+      // Settings does (checked first since Backup renders on top of
+      // Settings if both are open).
       if (backupOpenRef.current) {
         setBackupOpen(false);
         return;
@@ -290,23 +274,14 @@ export default function App() {
     setBackupOpen(false);
   }, []);
 
-  // Called by SettingsScreen right after a fresh sign-in finds an
-  // existing backup for the account. Settings has already saved and
-  // closed itself by this point — open Backup with the auto-restore
-  // prompt armed so the user can choose whether to restore it.
-  const handleBackupFound = useCallback(() => {
-    setAutoRestorePrompt(true);
-    openBackup();
-  }, [openBackup]);
-
-  // ── Reactive sign-out / account-deletion re-init ───────────
-  // Called by SettingsScreen AFTER it has signed out of Firebase and
-  // cleared all local data (including the profiles table). Because the
+  // ── Reactive re-init after "Erase this device" ─────────────
+  // Called by SettingsScreen AFTER it has cleared all local data
+  // (including the profiles table). Because the
   // profile is gone, we recreate a fresh one, reset navigation to the
   // default tab, and close Settings — all via React state, with NO
   // window.location.reload(). The previous reload approach is what
   // produced the blank-screen-needing-refresh behaviour.
-  const handleSignedOut = useCallback(async () => {
+  const handleDataErased = useCallback(async () => {
     navHistoryRef.current = [];
     setNav({ tab: "pre-assess", view: "list" });
     // CRITICAL: set profile to null FIRST so the loading gate renders
@@ -319,7 +294,7 @@ export default function App() {
       const fresh = await ensureActiveProfile();
       setProfile(fresh);
     } catch (err) {
-      console.error("Re-init after sign-out failed:", err);
+      console.error("Re-init after erase failed:", err);
     }
   }, [closeSettings]);
 
@@ -450,15 +425,13 @@ export default function App() {
         >
           <SettingsScreen
             onClose={closeSettings}
-            onSignedOut={handleSignedOut}
-            onBackupFound={handleBackupFound}
+            onDataErased={handleDataErased}
           />
         </div>
       )}
 
       {/* Backup modal — same full-screen overlay treatment as Settings.
-          Rendered after it in the DOM so it sits on top during the
-          brief window both can be open (auto-open right after sign-in). */}
+          Rendered after it in the DOM so it sits on top if both are open. */}
       {backupOpen && (
         <div
           className="settings-overlay"
@@ -466,11 +439,7 @@ export default function App() {
           aria-modal="true"
           aria-label="Backup"
         >
-          <BackupScreen
-            onClose={closeBackup}
-            autoRestorePrompt={autoRestorePrompt}
-            onAutoRestorePromptHandled={() => setAutoRestorePrompt(false)}
-          />
+          <BackupScreen onClose={closeBackup} />
         </div>
       )}
     </div>

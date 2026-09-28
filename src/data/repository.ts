@@ -41,6 +41,7 @@ import type {
   PreAssessRecord,
   FollowUpRecord,
   AppConfig,
+  BackupSettings,
   Urgency,
   DischargeToFollowUpRequest,
 } from "./models";
@@ -468,6 +469,10 @@ export interface ImportPayload {
   acute: Omit<StoredAcute, "profileId" | "id">[];
   preAssess: Omit<StoredPreAssess, "profileId" | "id">[];
   followUp: Omit<StoredFollowUp, "profileId" | "id">[];
+  // The user's settings (BACKUP_SETTINGS_FIELDS). Optional: backups made
+  // before settings were included don't have it, and older versions of
+  // Slate simply ignore it, so the format version stays 1.
+  settings?: Partial<BackupSettings>;
 }
 
 // REPLACE wipes all clinical data for the profile first, then inserts the
