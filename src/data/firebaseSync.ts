@@ -36,9 +36,9 @@ import { firestoreDb } from "../firebase";
 import { LOCAL_ONLY_CONFIG_FIELDS, type AppConfig } from "./models";
 
 // Fields older versions of Slate wrote to Firestore that must not
-// stay there: the plaintext backup passphrase, and the old Google Docs
-// backup settings.
-const LEGACY_REMOTE_FIELDS = ["encryptionPassphrase", "gdocsEnabled", "gdocsDocId"];
+// stay there: the plaintext backup passphrase, the old Google Docs
+// backup settings, and a since-removed client ID override.
+const LEGACY_REMOTE_FIELDS = ["encryptionPassphrase", "gdocsEnabled", "gdocsDocId", "googleClientId"];
 
 function withoutLocalOnly(settings: Partial<AppConfig>): Partial<AppConfig> {
   const copy: Record<string, unknown> = { ...settings };

@@ -302,10 +302,6 @@ export interface AppConfig {
   // LOCAL ONLY. Empty means this device hasn't used the Drive backup
   // yet, which is what triggers the overwrite warning in BackupScreen.
   driveFileId: string;
-  // The user's own Google Cloud OAuth client ID, used for Drive backup.
-  // Public by design (not a secret), so it syncs with the other settings
-  // and doesn't need re-entering after sign-in on a new device.
-  googleClientId: string;
 }
 
 // AppConfig fields that must never leave the device.
@@ -322,7 +318,6 @@ export const DEFAULT_APP_CONFIG: AppConfig = {
   encryptionPassphrase: "",
   driveBackupEnabled: false,
   driveFileId: "",
-  googleClientId: "",
 };
 
 // ============================================================

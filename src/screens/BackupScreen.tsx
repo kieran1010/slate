@@ -39,10 +39,7 @@ import {
   type ModuleImportCounts,
 } from "../utils/exportImport";
 import {
-  normaliseClientId,
-  clientIdProblem,
-  hasBuiltInClientId,
-  resolveClientId,
+  isDriveConfigured,
   preloadGoogleSignIn,
   getDriveToken,
   revokeDriveToken,
@@ -56,7 +53,6 @@ import {
 interface FormState {
   encryptionPassphrase: string;
   driveBackupEnabled: boolean;
-  googleClientId: string;
 }
 
 interface BackupScreenProps {
@@ -101,10 +97,7 @@ export function BackupScreen({
   const [form, setForm] = useState<FormState>({
     encryptionPassphrase: DEFAULT_APP_CONFIG.encryptionPassphrase,
     driveBackupEnabled: DEFAULT_APP_CONFIG.driveBackupEnabled,
-    googleClientId: DEFAULT_APP_CONFIG.googleClientId,
   });
-  const [showClientIdHelp, setShowClientIdHelp] = useState(false);
-  const [showOwnClientId, setShowOwnClientId] = useState(false);
   const [initialized, setInitialized] = useState(false);
   const [passphraseVisible, setPassphraseVisible] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -141,7 +134,6 @@ export function BackupScreen({
     setForm({
       encryptionPassphrase: existingConfig.encryptionPassphrase,
       driveBackupEnabled: existingConfig.driveBackupEnabled,
-      googleClientId: existingConfig.googleClientId,
     });
     setInitialized(true);
   }, [existingConfig, initialized]);
@@ -150,7 +142,7 @@ export function BackupScreen({
   // straight from the button tap rather than after a network round-trip
   // (which some browsers treat as no longer user-initiated and block).
   useEffect(() => {
-    if (form.driveBackupEnabled) preloadGoogleSignIn();
+    if (form.driveBackupEnabled && isDriveConfigured()) preloadGoogleSignIn();
   }, [form.driveBackupEnabled]);
 
   // ── Restore prompt right after sign-in ─────────────────────
@@ -169,15 +161,13 @@ export function BackupScreen({
   async function handleSave() {
     setSaving(true);
     try {
-      // The passphrase stays on this device; the on/off switch and the
-      // client ID (both non-sensitive) are synced, so a new device knows
-      // to offer a restore and doesn't need the client ID re-entered.
-      const synced = {
+      // The passphrase stays on this device; only the (non-sensitive)
+      // on/off switch is synced, so a new device knows to offer a restore.
+      await saveConfig({
+        encryptionPassphrase: form.encryptionPassphrase,
         driveBackupEnabled: form.driveBackupEnabled,
-        googleClientId: normaliseClientId(form.googleClientId),
-      };
-      await saveConfig({ encryptionPassphrase: form.encryptionPassphrase, ...synced });
-      if (user) await saveRemoteSettings(user.uid, synced);
+      });
+      if (user) await saveRemoteSettings(user.uid, { driveBackupEnabled: form.driveBackupEnabled });
       setToastVisible(true);
       setTimeout(() => { setToastVisible(false); onClose?.(); }, 900);
     } catch (err) {
@@ -219,8 +209,7 @@ export function BackupScreen({
     } else if (kind === "drive") {
       setDriveImporting(true); setDriveResult(null);
       try {
-        const token = await getDriveToken(resolveClientId(form.googleClientId));
-        await rememberClientId();
+        const token = await getDriveToken();
         const file = await findBackupFile(token);
         if (!file) {
           setDriveResult({ ok: false, message: "No Slate backup found in this Google account's Drive." });
@@ -264,13 +253,10 @@ export function BackupScreen({
 
   // ── Drive export / import ─────────────────────────────────
   async function handleDriveExport() {
-    const problem = clientIdProblem(resolveClientId(form.googleClientId));
-    if (problem) { setDriveResult({ ok: false, message: problem }); return; }
     if (!form.encryptionPassphrase.trim()) { alert("Please set an encryption passphrase before backing up."); return; }
     setDriveExporting(true); setDriveResult(null); setPendingOverwrite(null);
     try {
-      const token = await getDriveToken(resolveClientId(form.googleClientId));
-      await rememberClientId();
+      const token = await getDriveToken();
       const existing = await findBackupFile(token);
       const config = await getConfig();
       if (existing && existing.id !== config.driveFileId) {
@@ -304,19 +290,7 @@ export function BackupScreen({
     setDriveResult({ ok: true, message: "Backed up to Google Drive." });
   }
 
-  // Keeps the user's own client ID (empty when using the built-in one)
-  // once it has just worked, without waiting for Save.
-  // Called only after the token request, so the consent popup still opens
-  // directly from the tap.
-  async function rememberClientId() {
-    const googleClientId = normaliseClientId(form.googleClientId);
-    await saveConfig({ googleClientId });
-    if (user) await saveRemoteSettings(user.uid, { googleClientId });
-  }
-
   function handleDriveImport() {
-    const problem = clientIdProblem(resolveClientId(form.googleClientId));
-    if (problem) { setDriveResult({ ok: false, message: problem }); return; }
     if (!form.encryptionPassphrase.trim()) { alert("Please enter your encryption passphrase first."); return; }
     setDriveResult(null); setPendingOverwrite(null);
     void openImportConfirm("drive");
@@ -324,53 +298,6 @@ export function BackupScreen({
 
   // ── Derived ───────────────────────────────────────────────
   const driveBusy = driveExporting || driveImporting;
-
-  // The client ID field and its setup steps. Shown up front only when no
-  // client ID is built into this version; otherwise tucked behind an
-  // "Advanced" link, since almost everyone should use the built-in one.
-  const clientIdField = (
-    <>
-      <div className="form-field">
-        <label className="form-label" htmlFor="b-client-id">Google OAuth client ID</label>
-        <input id="b-client-id" className="form-input"
-          placeholder="000000000000-xxxx.apps.googleusercontent.com"
-          value={form.googleClientId}
-          onChange={(e) => set("googleClientId", e.target.value)}
-          autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck={false} />
-        <span className="form-hint">
-          {hasBuiltInClientId()
-            ? "Optional. Leave blank to use Slate's built-in one."
-            : "From your own Google Cloud project."}{" "}
-          <button type="button" className="btn btn-ghost" style={{ padding: 0, fontSize: "inherit" }} onClick={() => setShowClientIdHelp((v) => !v)}>
-            {showClientIdHelp ? "Hide setup steps" : "How do I get one?"}
-          </button>
-        </span>
-      </div>
-
-      {showClientIdHelp && (
-        <div className="form-section-body">
-          <p className="form-hint">One-off, and free:</p>
-          <ol className="form-hint" style={{ paddingLeft: 18, lineHeight: 1.7 }}>
-            <li>At <strong>console.cloud.google.com</strong>, create a project.</li>
-            <li>Enable the <strong>Google Drive API</strong> for it.</li>
-            <li>
-              Configure the OAuth consent screen as <strong>External</strong>, and add your own
-              Google address as a test user.
-            </li>
-            <li>
-              Create an <strong>OAuth client ID</strong> of type <strong>Web application</strong>,
-              with <code>{window.location.origin}</code> as an authorised JavaScript origin.
-            </li>
-            <li>Paste the client ID above and tap Backup now.</li>
-          </ol>
-          <p className="form-hint">
-            The <code>drive.file</code> permission this uses is non-sensitive, so Google doesn't
-            require a security review for it.
-          </p>
-        </div>
-      )}
-    </>
-  );
 
   // ── Render ────────────────────────────────────────────────
   return (
@@ -492,45 +419,43 @@ export function BackupScreen({
 
           {form.driveBackupEnabled && !showDriveWarning && (
             <div>
-              {!hasBuiltInClientId() && clientIdField}
+              {!isDriveConfigured() && (
+                <div className="gdocs-notice" role="status">
+                  <AlertTriangle size={14} aria-hidden />
+                  <span>Google Drive backup isn't set up in this version of Slate.</span>
+                </div>
+              )}
 
-              <div className="form-section-body" style={{ paddingTop: "0.5rem" }}>
-                {showRestoreHint && (
-                  <div className="gdocs-notice" role="status" style={{ marginBottom: "0.5rem" }}>
-                    <AlertTriangle size={14} aria-hidden />
-                    <span>
-                      This account backs up to Google Drive. To restore on this device, enter your
-                      passphrase above, then tap Restore from Drive.
-                    </span>
+              {isDriveConfigured() && (
+                <div className="form-section-body" style={{ paddingTop: "0.5rem" }}>
+                  {showRestoreHint && (
+                    <div className="gdocs-notice" role="status" style={{ marginBottom: "0.5rem" }}>
+                      <AlertTriangle size={14} aria-hidden />
+                      <span>
+                        This account backs up to Google Drive. To restore on this device, enter your
+                        passphrase above, then tap Restore from Drive.
+                      </span>
+                    </div>
+                  )}
+                  <div className="data-action-buttons">
+                    <button className="btn btn-secondary data-btn"
+                      onClick={handleDriveExport} disabled={driveBusy || !!showImportConfirm || !!pendingOverwrite}>
+                      <Download size={14} aria-hidden />
+                      {driveExporting ? "Backing up…" : "Backup now"}
+                    </button>
+                    <button className="btn btn-secondary data-btn"
+                      onClick={handleDriveImport} disabled={driveBusy || !!showImportConfirm || !!pendingOverwrite}>
+                      <Upload size={14} aria-hidden />
+                      {driveImporting ? "Restoring…" : "Restore from Drive"}
+                    </button>
                   </div>
-                )}
-                <div className="data-action-buttons">
-                  <button className="btn btn-secondary data-btn"
-                    onClick={handleDriveExport} disabled={driveBusy || !!showImportConfirm || !!pendingOverwrite}>
-                    <Download size={14} aria-hidden />
-                    {driveExporting ? "Backing up…" : "Backup now"}
-                  </button>
-                  <button className="btn btn-secondary data-btn"
-                    onClick={handleDriveImport} disabled={driveBusy || !!showImportConfirm || !!pendingOverwrite}>
-                    <Upload size={14} aria-hidden />
-                    {driveImporting ? "Restoring…" : "Restore from Drive"}
-                  </button>
+                  {driveResult && (
+                    <p className={driveResult.ok ? "data-import-ok" : "auth-error"} style={{ marginTop: "0.5rem" }}>
+                      {driveResult.message}
+                    </p>
+                  )}
                 </div>
-                {driveResult && (
-                  <p className={driveResult.ok ? "data-import-ok" : "auth-error"} style={{ marginTop: "0.5rem" }}>
-                    {driveResult.message}
-                  </p>
-                )}
-              </div>
-
-              {hasBuiltInClientId() && (showOwnClientId || !!form.googleClientId.trim() ? clientIdField : (
-                <div className="form-section-body">
-                  <button type="button" className="btn btn-ghost" style={{ padding: 0, fontSize: "0.75rem" }}
-                    onClick={() => setShowOwnClientId(true)}>
-                    Advanced: use your own Google client ID
-                  </button>
-                </div>
-              ))}
+              )}
             </div>
           )}
         </section>
