@@ -41,6 +41,8 @@ import {
 import {
   normaliseClientId,
   clientIdProblem,
+  hasBuiltInClientId,
+  resolveClientId,
   preloadGoogleSignIn,
   getDriveToken,
   revokeDriveToken,
@@ -102,6 +104,7 @@ export function BackupScreen({
     googleClientId: DEFAULT_APP_CONFIG.googleClientId,
   });
   const [showClientIdHelp, setShowClientIdHelp] = useState(false);
+  const [showOwnClientId, setShowOwnClientId] = useState(false);
   const [initialized, setInitialized] = useState(false);
   const [passphraseVisible, setPassphraseVisible] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -216,7 +219,7 @@ export function BackupScreen({
     } else if (kind === "drive") {
       setDriveImporting(true); setDriveResult(null);
       try {
-        const token = await getDriveToken(form.googleClientId);
+        const token = await getDriveToken(resolveClientId(form.googleClientId));
         await rememberClientId();
         const file = await findBackupFile(token);
         if (!file) {
@@ -261,12 +264,12 @@ export function BackupScreen({
 
   // ── Drive export / import ─────────────────────────────────
   async function handleDriveExport() {
-    const problem = clientIdProblem(form.googleClientId);
+    const problem = clientIdProblem(resolveClientId(form.googleClientId));
     if (problem) { setDriveResult({ ok: false, message: problem }); return; }
     if (!form.encryptionPassphrase.trim()) { alert("Please set an encryption passphrase before backing up."); return; }
     setDriveExporting(true); setDriveResult(null); setPendingOverwrite(null);
     try {
-      const token = await getDriveToken(form.googleClientId);
+      const token = await getDriveToken(resolveClientId(form.googleClientId));
       await rememberClientId();
       const existing = await findBackupFile(token);
       const config = await getConfig();
@@ -301,7 +304,8 @@ export function BackupScreen({
     setDriveResult({ ok: true, message: "Backed up to Google Drive." });
   }
 
-  // Keeps a client ID that has just worked, without waiting for Save.
+  // Keeps the user's own client ID (empty when using the built-in one)
+  // once it has just worked, without waiting for Save.
   // Called only after the token request, so the consent popup still opens
   // directly from the tap.
   async function rememberClientId() {
@@ -311,7 +315,7 @@ export function BackupScreen({
   }
 
   function handleDriveImport() {
-    const problem = clientIdProblem(form.googleClientId);
+    const problem = clientIdProblem(resolveClientId(form.googleClientId));
     if (problem) { setDriveResult({ ok: false, message: problem }); return; }
     if (!form.encryptionPassphrase.trim()) { alert("Please enter your encryption passphrase first."); return; }
     setDriveResult(null); setPendingOverwrite(null);
@@ -320,6 +324,53 @@ export function BackupScreen({
 
   // ── Derived ───────────────────────────────────────────────
   const driveBusy = driveExporting || driveImporting;
+
+  // The client ID field and its setup steps. Shown up front only when no
+  // client ID is built into this version; otherwise tucked behind an
+  // "Advanced" link, since almost everyone should use the built-in one.
+  const clientIdField = (
+    <>
+      <div className="form-field">
+        <label className="form-label" htmlFor="b-client-id">Google OAuth client ID</label>
+        <input id="b-client-id" className="form-input"
+          placeholder="000000000000-xxxx.apps.googleusercontent.com"
+          value={form.googleClientId}
+          onChange={(e) => set("googleClientId", e.target.value)}
+          autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck={false} />
+        <span className="form-hint">
+          {hasBuiltInClientId()
+            ? "Optional. Leave blank to use Slate's built-in one."
+            : "From your own Google Cloud project."}{" "}
+          <button type="button" className="btn btn-ghost" style={{ padding: 0, fontSize: "inherit" }} onClick={() => setShowClientIdHelp((v) => !v)}>
+            {showClientIdHelp ? "Hide setup steps" : "How do I get one?"}
+          </button>
+        </span>
+      </div>
+
+      {showClientIdHelp && (
+        <div className="form-section-body">
+          <p className="form-hint">One-off, and free:</p>
+          <ol className="form-hint" style={{ paddingLeft: 18, lineHeight: 1.7 }}>
+            <li>At <strong>console.cloud.google.com</strong>, create a project.</li>
+            <li>Enable the <strong>Google Drive API</strong> for it.</li>
+            <li>
+              Configure the OAuth consent screen as <strong>External</strong>, and add your own
+              Google address as a test user.
+            </li>
+            <li>
+              Create an <strong>OAuth client ID</strong> of type <strong>Web application</strong>,
+              with <code>{window.location.origin}</code> as an authorised JavaScript origin.
+            </li>
+            <li>Paste the client ID above and tap Backup now.</li>
+          </ol>
+          <p className="form-hint">
+            The <code>drive.file</code> permission this uses is non-sensitive, so Google doesn't
+            require a security review for it.
+          </p>
+        </div>
+      )}
+    </>
+  );
 
   // ── Render ────────────────────────────────────────────────
   return (
@@ -441,43 +492,7 @@ export function BackupScreen({
 
           {form.driveBackupEnabled && !showDriveWarning && (
             <div>
-              <div className="form-field">
-                <label className="form-label" htmlFor="b-client-id">Google OAuth client ID</label>
-                <input id="b-client-id" className="form-input"
-                  placeholder="000000000000-xxxx.apps.googleusercontent.com"
-                  value={form.googleClientId}
-                  onChange={(e) => set("googleClientId", e.target.value)}
-                  autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck={false} />
-                <span className="form-hint">
-                  From your own Google Cloud project.{" "}
-                  <button type="button" className="btn btn-ghost" style={{ padding: 0, fontSize: "inherit" }} onClick={() => setShowClientIdHelp((v) => !v)}>
-                    {showClientIdHelp ? "Hide setup steps" : "How do I get one?"}
-                  </button>
-                </span>
-              </div>
-
-              {showClientIdHelp && (
-                <div className="form-section-body">
-                  <p className="form-hint">One-off, and free:</p>
-                  <ol className="form-hint" style={{ paddingLeft: 18, lineHeight: 1.7 }}>
-                    <li>At <strong>console.cloud.google.com</strong>, create a project.</li>
-                    <li>Enable the <strong>Google Drive API</strong> for it.</li>
-                    <li>
-                      Configure the OAuth consent screen as <strong>External</strong>, and add your own
-                      Google address as a test user.
-                    </li>
-                    <li>
-                      Create an <strong>OAuth client ID</strong> of type <strong>Web application</strong>,
-                      with <code>{window.location.origin}</code> as an authorised JavaScript origin.
-                    </li>
-                    <li>Paste the client ID above and tap Backup now.</li>
-                  </ol>
-                  <p className="form-hint">
-                    The <code>drive.file</code> permission this uses is non-sensitive, so Google doesn't
-                    require the app to go through verification.
-                  </p>
-                </div>
-              )}
+              {!hasBuiltInClientId() && clientIdField}
 
               <div className="form-section-body" style={{ paddingTop: "0.5rem" }}>
                 {showRestoreHint && (
@@ -507,6 +522,15 @@ export function BackupScreen({
                   </p>
                 )}
               </div>
+
+              {hasBuiltInClientId() && (showOwnClientId || !!form.googleClientId.trim() ? clientIdField : (
+                <div className="form-section-body">
+                  <button type="button" className="btn btn-ghost" style={{ padding: 0, fontSize: "0.75rem" }}
+                    onClick={() => setShowOwnClientId(true)}>
+                    Advanced: use your own Google client ID
+                  </button>
+                </div>
+              ))}
             </div>
           )}
         </section>

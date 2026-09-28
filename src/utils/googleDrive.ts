@@ -12,9 +12,11 @@
 //   restores, never at sign-in.
 //
 // CLIENT ID:
-//   Entered by the user on the Backup screen (their own Google
-//   Cloud OAuth client) and kept in AppConfig.googleClientId.
-//   Nothing is built into the app. A client ID is public by
+//   Built in at build time from the VITE_GOOGLE_CLIENT_ID GitHub
+//   Actions variable: the Hypnos Medical OAuth client, shared
+//   across the Hypnos suite, so users need no Google Cloud setup.
+//   A user can override it with their own client ID on the Backup
+//   screen (AppConfig.googleClientId). A client ID is public by
 //   design, so it isn't treated as a secret.
 //
 // SCOPE:  drive.file
@@ -42,6 +44,17 @@ const UPLOAD_API = "https://www.googleapis.com/upload/drive/v3/files";
 
 export const BACKUP_FILENAME = "slate-backup.slate";
 
+const BUILT_IN_CLIENT_ID = normaliseClientId(import.meta.env.VITE_GOOGLE_CLIENT_ID ?? "");
+
+export function hasBuiltInClientId(): boolean {
+  return !!BUILT_IN_CLIENT_ID;
+}
+
+/** The client ID to use: the user's own if they entered one, else the built-in. */
+export function resolveClientId(override: string): string {
+  return normaliseClientId(override) || BUILT_IN_CLIENT_ID;
+}
+
 // e.g. 296555094518-ek78l30etraoao6fu8536e2vasgds9ap.apps.googleusercontent.com
 const CLIENT_ID_PATTERN = /^\d+-[a-z0-9_-]+\.apps\.googleusercontent\.com$/i;
 
@@ -57,7 +70,7 @@ export function normaliseClientId(value: string): string {
  */
 export function clientIdProblem(value: string): string | null {
   const id = normaliseClientId(value);
-  if (!id) return "Enter your Google OAuth client ID first.";
+  if (!id) return "Google Drive backup isn't set up in this version of Slate. Enter your own Google OAuth client ID to use it.";
   if (/^GOCSPX-/.test(id)) {
     return "That is the client secret, not the client ID. Copy the Client ID instead — it ends in .apps.googleusercontent.com";
   }
