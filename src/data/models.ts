@@ -302,6 +302,10 @@ export interface AppConfig {
   // Empty means this device hasn't used the Drive backup
   // yet, which is what triggers the overwrite warning in BackupScreen.
   driveFileId: string;
+  // When this device last synced with Drive (epoch ms; 0 = never).
+  // Per-device, not carried in backups. Drives the "not synced for 7
+  // days" prompt (components/DriveStalePrompt.tsx).
+  driveLastSyncedAt: number;
 }
 
 // Settings carried inside the encrypted backup, so restoring on a new
@@ -328,6 +332,7 @@ export const DEFAULT_APP_CONFIG: AppConfig = {
   encryptionPassphrase: "",
   driveBackupEnabled: false,
   driveFileId: "",
+  driveLastSyncedAt: 0,
 };
 
 // ============================================================

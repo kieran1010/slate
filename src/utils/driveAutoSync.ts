@@ -48,6 +48,17 @@ export interface AutoSyncStatus {
 
 const DEBOUNCE_MS = 30_000;
 
+/** A device that hasn't synced for this long is prompted to reconnect. */
+export const DRIVE_STALE_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** True when sync is on but this device hasn't synced in over 7 days (or ever). */
+export function isDriveSyncStale(
+  config: { driveBackupEnabled: boolean; driveLastSyncedAt: number },
+  now = Date.now()
+): boolean {
+  return config.driveBackupEnabled && now - config.driveLastSyncedAt > DRIVE_STALE_MS;
+}
+
 let status: AutoSyncStatus = { state: "idle", lastSyncedAt: null, message: "" };
 const listeners = new Set<() => void>();
 let timer: ReturnType<typeof setTimeout> | null = null;
@@ -107,7 +118,7 @@ async function runAutoSync(): Promise<void> {
     try {
       const encrypted = await buildEncryptedPayload(config.encryptionPassphrase);
       const file = await writeBackupFile(token, encrypted, existing?.id ?? null);
-      await saveConfig({ driveFileId: file.id });
+      await saveConfig({ driveFileId: file.id, driveLastSyncedAt: Date.now() });
     } catch (err) {
       dirty = true;
       throw err;
@@ -146,9 +157,24 @@ export function startDriveAutoSync(): void {
 
 /** Call after a manual backup or restore: Drive and this device now agree. */
 export function noteDriveSynced(): void {
+  saveConfig({ driveLastSyncedAt: Date.now() }).catch((err) => console.error("Saving sync time failed:", err));
   dirty = false;
   if (timer) clearTimeout(timer);
   setStatus({ state: "synced", lastSyncedAt: Date.now() });
+}
+
+/**
+ * Syncs immediately, whether or not anything changed. Needs a valid token
+ * (call getDriveToken from a tap first). Resolves to the resulting state:
+ * "synced", "conflict" (Drive holds another device's backup), "off" (no
+ * passphrase saved) or "error".
+ */
+export async function syncDriveNow(): Promise<AutoSyncState> {
+  dirty = true;
+  if (timer) clearTimeout(timer);
+  if (status.state === "conflict") setStatus({ state: "idle", lastSyncedAt: status.lastSyncedAt });
+  await runAutoSync();
+  return status.state;
 }
 
 /** Call after the user reconnects (fresh token) to flush waiting changes. */
