@@ -24,7 +24,7 @@
 //   src/screens/BackupScreen.tsx
 // ============================================================
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { Eye, EyeOff, AlertTriangle, Check, X, Download, Upload } from "lucide-react";
 import { getConfig, saveConfig, hasAnyLocalData, type ImportMode } from "../data/repository";
@@ -46,6 +46,14 @@ import {
   readBackupFile,
   writeBackupFile,
 } from "../utils/googleDrive";
+import {
+  subscribeAutoSync,
+  getAutoSyncStatus,
+  noteDriveSynced,
+  resumeAutoSync,
+  stopAutoSync,
+  type AutoSyncStatus,
+} from "../utils/driveAutoSync";
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -80,6 +88,19 @@ function describeImport(mode: ImportMode, c: ImportResultCounts): string {
 }
 
 // ── Component ─────────────────────────────────────────────────
+
+function describeAutoSync(s: AutoSyncStatus): string {
+  const last = s.lastSyncedAt ? ` Last synced ${new Date(s.lastSyncedAt).toLocaleTimeString()}.` : "";
+  switch (s.state) {
+    case "pending": return "Auto-sync: changes will sync shortly." + last;
+    case "syncing": return "Auto-sync: syncing…";
+    case "synced": return "Auto-sync: up to date." + last;
+    case "needs-reconnect": return "Auto-sync paused — reconnect to Google to sync your latest changes.";
+    case "conflict": return "Auto-sync paused — Drive holds a backup from another device. Use Sync now to choose whether to replace it, or Restore from Drive.";
+    case "error": return `Auto-sync failed${s.message ? `: ${s.message}` : ""}. It will retry.`;
+    default: return "Auto-sync is on. Syncs about 30 seconds after you make changes, while connected to Google (about an hour after you last tapped Sync now or Restore)." + last;
+  }
+}
 
 export function BackupScreen({
   onClose,
@@ -141,6 +162,17 @@ export function BackupScreen({
     setForm((f) => ({ ...f, [field]: value }));
   }, []);
 
+  // The Drive toggle saves immediately rather than waiting for the Save
+  // button — otherwise leaving the screen (or closing the app) after
+  // flipping it silently reverts it.
+  function setDriveEnabled(enabled: boolean) {
+    set("driveBackupEnabled", enabled);
+    saveConfig({ driveBackupEnabled: enabled }).catch((err) => {
+      console.error("Drive toggle save failed:", err);
+      alert("Couldn't save the Google Drive setting — please try again.");
+    });
+  }
+
   // ── Save ──────────────────────────────────────────────────
   async function handleSave() {
     setSaving(true);
@@ -201,6 +233,7 @@ export function BackupScreen({
         // This device now holds that backup, so later backups from here
         // may overwrite it without the "another device" warning.
         await saveConfig({ driveFileId: file.id });
+        noteDriveSynced();
         setDriveResult({ ok: true, message: describeImport(mode, c) });
       } catch (err) {
         setDriveResult({ ok: false, message: err instanceof Error ? err.message : "Restore failed." });
@@ -237,6 +270,7 @@ export function BackupScreen({
     setDriveExporting(true); setDriveResult(null); setPendingOverwrite(null);
     try {
       const token = await getDriveToken();
+      resumeAutoSync();
       const existing = await findBackupFile(token);
       const config = await getConfig();
       if (existing && existing.id !== config.driveFileId) {
@@ -267,7 +301,17 @@ export function BackupScreen({
     const encrypted = await buildEncryptedPayload(form.encryptionPassphrase);
     const file = await writeBackupFile(token, encrypted, fileId);
     await saveConfig({ driveFileId: file.id });
-    setDriveResult({ ok: true, message: "Backed up to Google Drive." });
+    noteDriveSynced();
+    setDriveResult({ ok: true, message: "Synced with Google Drive." });
+  }
+
+  async function handleDriveReconnect() {
+    try {
+      await getDriveToken();
+      resumeAutoSync();
+    } catch (err) {
+      setDriveResult({ ok: false, message: err instanceof Error ? err.message : "Reconnect failed." });
+    }
   }
 
   function handleDriveImport() {
@@ -278,6 +322,8 @@ export function BackupScreen({
 
   // ── Derived ───────────────────────────────────────────────
   const driveBusy = driveExporting || driveImporting;
+  const autoSync = useSyncExternalStore(subscribeAutoSync, getAutoSyncStatus);
+  const autoSyncLine = describeAutoSync(autoSync);
 
   // ── Render ────────────────────────────────────────────────
   return (
@@ -366,16 +412,17 @@ export function BackupScreen({
           <div className="form-field">
             <div className="toggle-row">
               <span className="toggle-label">
-                Back up to Google Drive
+                Sync with Google Drive
                 <span className="toggle-label-sub">
                   Keeps one encrypted backup file in your own Google Drive
                 </span>
               </span>
               <button className="toggle-track" role="switch" aria-checked={form.driveBackupEnabled}
-                aria-label="Back up to Google Drive"
+                aria-label="Sync with Google Drive"
                 onClick={() => {
                   if (form.driveBackupEnabled) {
-                    set("driveBackupEnabled", false);
+                    setDriveEnabled(false);
+                    stopAutoSync();
                     setPendingOverwrite(null);
                     void revokeDriveToken();
                   } else { setShowDriveWarning(true); }
@@ -400,7 +447,7 @@ export function BackupScreen({
               </p>
               <div className="ai-warning-actions">
                 <button className="btn btn-secondary" onClick={() => setShowDriveWarning(false)}>Cancel</button>
-                <button className="btn btn-primary" onClick={() => { setShowDriveWarning(false); set("driveBackupEnabled", true); }}>
+                <button className="btn btn-primary" onClick={() => { setShowDriveWarning(false); setDriveEnabled(true); }}>
                   <Check size={14} aria-hidden /> I understand, enable
                 </button>
               </div>
@@ -422,7 +469,7 @@ export function BackupScreen({
                     <button className="btn btn-secondary data-btn"
                       onClick={handleDriveExport} disabled={driveBusy || !!showImportConfirm || !!pendingOverwrite}>
                       <Download size={14} aria-hidden />
-                      {driveExporting ? "Backing up…" : "Backup now"}
+                      {driveExporting ? "Syncing…" : "Sync now"}
                     </button>
                     <button className="btn btn-secondary data-btn"
                       onClick={handleDriveImport} disabled={driveBusy || !!showImportConfirm || !!pendingOverwrite}>
@@ -430,6 +477,12 @@ export function BackupScreen({
                       {driveImporting ? "Restoring…" : "Restore from Drive"}
                     </button>
                   </div>
+                  <p className="form-hint" role="status" style={{ marginTop: "0.5rem" }}>
+                    {autoSyncLine}
+                    {autoSync.state === "needs-reconnect" && (
+                      <> <button className="btn btn-ghost" onClick={handleDriveReconnect} disabled={driveBusy}>Reconnect</button></>
+                    )}
+                  </p>
                   {driveResult && (
                     <p className={driveResult.ok ? "data-import-ok" : "auth-error"} style={{ marginTop: "0.5rem" }}>
                       {driveResult.message}

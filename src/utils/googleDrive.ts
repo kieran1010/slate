@@ -120,6 +120,11 @@ function forgetToken(): void {
   cachedExpiry = 0;
 }
 
+/** The cached token if it is still valid, else null. Never shows a popup. */
+export function peekDriveToken(): string | null {
+  return cachedToken && Date.now() < cachedExpiry ? cachedToken : null;
+}
+
 /**
  * Returns a Drive access token, showing Google's consent popup
  * the first time (or when the cached token has expired). Must be

@@ -35,6 +35,8 @@ import { ImportScreen } from "./screens/ImportScreen";
 import { SettingsScreen } from "./screens/SettingsScreen";
 import { BackupScreen } from "./screens/BackupScreen";
 import { ensureActiveProfile } from "./data/profiles";
+import { DriveStalePrompt } from "./components/DriveStalePrompt";
+import { startDriveAutoSync } from "./utils/driveAutoSync";
 import type { Profile } from "./data/db";
 import type { NavState, Tab, NavigateFn } from "./types/nav";
 
@@ -72,7 +74,9 @@ export default function App() {
   const [profile, setProfile] = useState<Profile | null>(null);
 
   useEffect(() => {
-    ensureActiveProfile().then(setProfile).catch(console.error);
+    ensureActiveProfile()
+      .then((p) => { startDriveAutoSync(); setProfile(p); })
+      .catch(console.error);
   }, []);
 
   // ── Navigation state ───────────────────────────────────────
@@ -412,6 +416,9 @@ export default function App() {
       </main>
 
       <TabBar active={nav.tab} onSelect={selectTab} />
+
+      {/* Shown when Drive sync is on but hasn't run for over 7 days */}
+      <DriveStalePrompt onOpenBackup={openBackup} />
 
       {/* Settings modal — full-screen overlay above the shell.
           Rendered here (not inside <main>) so it covers the
