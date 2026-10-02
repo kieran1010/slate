@@ -1,0 +1,165 @@
+// ============================================================
+// Slate — utils/driveAutoSync.ts
+// ============================================================
+// Automatic Google Drive sync, when "Sync with Google Drive" is on.
+//
+// TRIGGER:
+//   Any change to patients / acute / pre-assess / follow-up schedules
+//   an upload 30 s after the last change (debounced). Pending changes
+//   are also flushed as soon as the app is hidden or closed.
+//
+// AUTH:
+//   The Drive token is kept in memory only and Google's consent popup
+//   needs a tap, so auto-sync never asks for a token. It uploads only
+//   while a valid token exists (after a manual Sync now / Restore this
+//   session, ~1 hour). When the token lapses it stops and reports
+//   "needs-reconnect"; the user taps Reconnect on the Backup screen.
+//
+// CONFLICTS:
+//   Drive holds one backup file. If it isn't the one this device last
+//   wrote or restored (driveFileId), auto-sync never overwrites it: it
+//   pauses with status "conflict" until the user resolves it with
+//   Sync now (which shows the overwrite confirm) or Restore.
+//
+// FILE LOCATION:
+//   src/utils/driveAutoSync.ts
+// ============================================================
+
+import { db } from "../data/db";
+import { getConfig, saveConfig } from "../data/repository";
+import { buildEncryptedPayload } from "./exportImport";
+import { findBackupFile, peekDriveToken, writeBackupFile } from "./googleDrive";
+
+export type AutoSyncState =
+  | "off"             // toggle off, or no passphrase saved
+  | "idle"            // enabled, nothing pending
+  | "pending"         // changes waiting for the debounce
+  | "syncing"
+  | "synced"
+  | "needs-reconnect" // changes waiting, no valid Drive token
+  | "conflict"        // Drive holds a backup this device didn't write
+  | "error";
+
+export interface AutoSyncStatus {
+  state: AutoSyncState;
+  lastSyncedAt: number | null;
+  message: string;
+}
+
+const DEBOUNCE_MS = 30_000;
+
+let status: AutoSyncStatus = { state: "idle", lastSyncedAt: null, message: "" };
+const listeners = new Set<() => void>();
+let timer: ReturnType<typeof setTimeout> | null = null;
+let started = false;
+let dirty = false;   // changes not yet uploaded
+let running = false;
+
+function setStatus(next: Partial<AutoSyncStatus>): void {
+  status = { ...status, message: "", ...next };
+  listeners.forEach((l) => l());
+}
+
+export function subscribeAutoSync(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => { listeners.delete(listener); };
+}
+
+export function getAutoSyncStatus(): AutoSyncStatus {
+  return status;
+}
+
+function schedule(delay: number): void {
+  if (timer) clearTimeout(timer);
+  timer = setTimeout(() => { void runAutoSync(); }, delay);
+}
+
+function onDataChanged(): void {
+  dirty = true;
+  // A paused (conflict) or errored sync stays visible until resolved.
+  if (status.state !== "conflict") setStatus({ state: "pending", lastSyncedAt: status.lastSyncedAt });
+  schedule(DEBOUNCE_MS);
+}
+
+async function runAutoSync(): Promise<void> {
+  if (running || !dirty) return;
+  running = true;
+  try {
+    const config = await getConfig();
+    if (!config.driveBackupEnabled || !config.encryptionPassphrase.trim()) {
+      dirty = false;
+      setStatus({ state: "off", lastSyncedAt: status.lastSyncedAt });
+      return;
+    }
+    const token = peekDriveToken();
+    if (!token) {
+      setStatus({ state: "needs-reconnect", lastSyncedAt: status.lastSyncedAt });
+      return;
+    }
+    setStatus({ state: "syncing", lastSyncedAt: status.lastSyncedAt });
+    const existing = await findBackupFile(token);
+    if (existing && existing.id !== config.driveFileId) {
+      setStatus({ state: "conflict", lastSyncedAt: status.lastSyncedAt });
+      return;
+    }
+    // Clear before building so a change made mid-upload re-marks dirty.
+    dirty = false;
+    try {
+      const encrypted = await buildEncryptedPayload(config.encryptionPassphrase);
+      const file = await writeBackupFile(token, encrypted, existing?.id ?? null);
+      await saveConfig({ driveFileId: file.id });
+    } catch (err) {
+      dirty = true;
+      throw err;
+    }
+    setStatus({ state: dirty ? "pending" : "synced", lastSyncedAt: Date.now() });
+  } catch (err) {
+    console.error("Drive auto-sync failed:", err);
+    setStatus({
+      state: "error",
+      lastSyncedAt: status.lastSyncedAt,
+      message: err instanceof Error ? err.message : "Auto-sync failed.",
+    });
+    schedule(5 * 60_000); // retry later; dirty is still set
+  } finally {
+    running = false;
+    if (dirty && status.state === "pending") schedule(DEBOUNCE_MS);
+  }
+}
+
+/** Registers the change hooks. Call once, after the profile is ready. */
+export function startDriveAutoSync(): void {
+  if (started) return;
+  started = true;
+  for (const table of [db.patients, db.acute, db.preAssess, db.followUp]) {
+    table.hook("creating", () => { onDataChanged(); });
+    table.hook("updating", () => { onDataChanged(); });
+    table.hook("deleting", () => { onDataChanged(); });
+  }
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden" && dirty) {
+      if (timer) clearTimeout(timer);
+      void runAutoSync();
+    }
+  });
+}
+
+/** Call after a manual backup or restore: Drive and this device now agree. */
+export function noteDriveSynced(): void {
+  dirty = false;
+  if (timer) clearTimeout(timer);
+  setStatus({ state: "synced", lastSyncedAt: Date.now() });
+}
+
+/** Call after the user reconnects (fresh token) to flush waiting changes. */
+export function resumeAutoSync(): void {
+  if (status.state === "conflict") setStatus({ state: "idle", lastSyncedAt: status.lastSyncedAt });
+  if (dirty) schedule(0);
+}
+
+/** Call when the toggle is switched off. */
+export function stopAutoSync(): void {
+  dirty = false;
+  if (timer) clearTimeout(timer);
+  setStatus({ state: "off", lastSyncedAt: status.lastSyncedAt });
+}

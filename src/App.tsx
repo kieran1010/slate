@@ -35,6 +35,7 @@ import { ImportScreen } from "./screens/ImportScreen";
 import { SettingsScreen } from "./screens/SettingsScreen";
 import { BackupScreen } from "./screens/BackupScreen";
 import { ensureActiveProfile } from "./data/profiles";
+import { startDriveAutoSync } from "./utils/driveAutoSync";
 import type { Profile } from "./data/db";
 import type { NavState, Tab, NavigateFn } from "./types/nav";
 
@@ -72,7 +73,9 @@ export default function App() {
   const [profile, setProfile] = useState<Profile | null>(null);
 
   useEffect(() => {
-    ensureActiveProfile().then(setProfile).catch(console.error);
+    ensureActiveProfile()
+      .then((p) => { startDriveAutoSync(); setProfile(p); })
+      .catch(console.error);
   }, []);
 
   // ── Navigation state ───────────────────────────────────────
