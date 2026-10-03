@@ -7,14 +7,12 @@
 //   BROWSE  — no search text; shows all archived records,
 //             most-recently-archived first.
 //
-//   SEARCH  — user types an NHI (3+ chars); only that
-//             patient's archived records are shown, across
-//             all three modules. This is the "search by NHI,
-//             ask which of acute/pre-assess/follow-up to
-//             restore to" flow from the to-do list: the search
-//             results naturally show which modules the patient
-//             has records in, and the user restores the one
-//             they want.
+//   SEARCH  — free text across every field of the archived
+//             records (NHI, name, DOB, procedure, notes, location,
+//             medications, status, module…), all three modules at
+//             once — see utils/archiveSearch.ts. Searching an NHI
+//             still shows which modules that patient has records
+//             in, so the user can restore the one they want.
 //
 // RESTORE: tapping "Restore" on a card un-archives that record
 // (flips archived = 0) via restoreRecord(). The card disappears
@@ -25,16 +23,16 @@
 //   src/screens/ArchiveScreen.tsx
 // ============================================================
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { Search, X, Archive } from "lucide-react";
 import {
   listArchived,
-  searchArchivedByNhi,
   restoreRecord,
   listPatients,
 } from "../data/repository";
 import { formatDateTime } from "../utils/format";
+import { matchesArchiveSearch } from "../utils/archiveSearch";
 import type { ArchivedItem } from "../data/repository";
 
 // The single most useful clinical field per module — shown as the
@@ -69,22 +67,21 @@ const MODULE_BADGE_CLS: Record<ArchivedItem["module"], string> = {
 export function ArchiveScreen() {
   const [search, setSearch] = useState("");
 
-  // Single live query that switches between browse and search
-  // mode based on whether the search string is long enough to
-  // be a meaningful NHI prefix. Re-runs whenever the search
-  // string or the underlying tables change.
-  const rows = useLiveQuery(async () => {
-    const nhi = search.trim().toUpperCase();
-    const [items, patients] = await Promise.all([
-      nhi.length >= 3 ? searchArchivedByNhi(nhi) : listArchived(),
-      listPatients(),
-    ]);
+  // All archived records, live. Search filters this in memory — archive
+  // volumes are small, and it lets the search look at every field.
+  const all = useLiveQuery(async () => {
+    const [items, patients] = await Promise.all([listArchived(), listPatients()]);
     const byNhi = new Map(patients.map((p) => [p.nhi, p]));
     return items.map((item) => ({
       item,
       patient: byNhi.get(item.record.nhi),
     }));
-  }, [search]);
+  }, []);
+
+  const rows = useMemo(
+    () => all?.filter(({ item, patient }) => matchesArchiveSearch(item, patient, search)),
+    [all, search]
+  );
 
   // ── Restore ────────────────────────────────────────────────
   async function handleRestore(item: ArchivedItem) {
@@ -104,7 +101,7 @@ export function ArchiveScreen() {
   }
 
   // ── Render ─────────────────────────────────────────────────
-  const isSearching = search.trim().length >= 3;
+  const isSearching = search.trim().length > 0;
   const isLoading = rows === undefined;
   const isEmpty = !isLoading && rows.length === 0;
 
@@ -115,20 +112,19 @@ export function ArchiveScreen() {
         <h1 className="screen-header-title">Archive</h1>
       </div>
 
-      {/* ── NHI search bar ─────────────────────────────────── */}
+      {/* ── Search bar ─────────────────────────────────── */}
       <div style={{ paddingTop: 12 }}>
         <div className="search-bar">
           <Search size={16} color="var(--dim)" aria-hidden />
           <input
             className="search-bar-input"
             type="text"
-            placeholder="Search by NHI…"
+            placeholder="Search name, NHI, procedure, notes…"
             value={search}
-            onChange={(e) => setSearch(e.target.value.toUpperCase())}
-            autoCapitalize="characters"
+            onChange={(e) => setSearch(e.target.value)}
             autoCorrect="off"
             spellCheck={false}
-            aria-label="Search archived records by NHI"
+            aria-label="Search archived records"
           />
           {search && (
             <button
@@ -146,7 +142,7 @@ export function ArchiveScreen() {
       <div style={{ padding: "0 16px 10px" }}>
         <span className="eyebrow">
           {isSearching
-            ? `Results for ${search.trim().toUpperCase()}`
+            ? `Results for “${search.trim()}”`
             : "All archived records"}
         </span>
       </div>
@@ -161,11 +157,11 @@ export function ArchiveScreen() {
         <div className="empty-state">
           <Archive size={36} color="var(--dim)" aria-hidden />
           <p className="empty-state-title">
-            {isSearching ? "No archived records for this NHI" : "Archive is empty"}
+            {isSearching ? "No matching archived records" : "Archive is empty"}
           </p>
           <p>
             {isSearching
-              ? "Try a different NHI, or clear the search to browse all archived records."
+              ? "Try different words, or clear the search to browse all archived records."
               : "Records appear here after they are archived from the Acute, Pre-assessment, or Follow-up screens."}
           </p>
         </div>
