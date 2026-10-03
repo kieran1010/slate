@@ -1,8 +1,9 @@
 // ============================================================
 // Slate — components/DriveStalePrompt.tsx
 // ============================================================
-// Pop-up shown when "Sync with Google Drive" is on but this device
-// hasn't synced for over 7 days (or never has). Checked when the app
+// Pop-up shown when "Sync with Google Drive" is on and this device last
+// synced over 7 days ago. Not shown before the first sync ever — the
+// Backup screen offers a plain Sync now for that. Checked when the app
 // starts and whenever it returns to the foreground. "Not now" snoozes
 // it until the app is next restarted.
 //
@@ -25,7 +26,7 @@ interface DriveStalePromptProps {
 let snoozed = false;
 
 export function DriveStalePrompt({ onOpenBackup }: DriveStalePromptProps) {
-  const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
+  const [lastSyncedAt, setLastSyncedAt] = useState(0);
   const [visible, setVisible] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -37,7 +38,7 @@ export function DriveStalePrompt({ onOpenBackup }: DriveStalePromptProps) {
         .then((config) => {
           if (snoozed || !isDriveSyncStale(config)) return;
           preloadGoogleSignIn(); // so the sign-in popup opens straight from the tap
-          setLastSyncedAt(config.driveLastSyncedAt || null);
+          setLastSyncedAt(config.driveLastSyncedAt);
           setVisible(true);
         })
         .catch(console.error);
@@ -77,10 +78,8 @@ export function DriveStalePrompt({ onOpenBackup }: DriveStalePromptProps) {
       <div className="ai-warning" style={{ margin: 0 }}>
         <p className="ai-warning-title"><AlertTriangle size={16} aria-hidden /> Google Drive sync is overdue</p>
         <p>
-          {lastSyncedAt
-            ? `This device last synced with Google Drive on ${new Date(lastSyncedAt).toLocaleDateString()}, more than 7 days ago.`
-            : "This device hasn't synced with Google Drive yet."}{" "}
-          Reconnect to sync your latest changes now.
+          This device last synced with Google Drive on {new Date(lastSyncedAt).toLocaleDateString()}, more
+          than 7 days ago. Reconnect to sync your latest changes now.
         </p>
         {error && <p className="auth-error">{error}</p>}
         <div className="ai-warning-actions">

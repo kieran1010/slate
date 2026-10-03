@@ -52,12 +52,20 @@ const DEBOUNCE_MS = 30_000;
 /** A device that hasn't synced for this long is prompted to reconnect. */
 export const DRIVE_STALE_MS = 7 * 24 * 60 * 60 * 1000;
 
-/** True when sync is on but this device hasn't synced in over 7 days (or ever). */
+/**
+ * True when sync is on and this device last synced over 7 days ago. A
+ * device that has never synced (driveLastSyncedAt 0) is not "overdue" —
+ * the Backup screen just offers a first Sync now instead.
+ */
 export function isDriveSyncStale(
   config: { driveBackupEnabled: boolean; driveLastSyncedAt: number },
   now = Date.now()
 ): boolean {
-  return config.driveBackupEnabled && now - config.driveLastSyncedAt > DRIVE_STALE_MS;
+  return (
+    config.driveBackupEnabled &&
+    config.driveLastSyncedAt > 0 &&
+    now - config.driveLastSyncedAt > DRIVE_STALE_MS
+  );
 }
 
 let status: AutoSyncStatus = { state: "idle", lastSyncedAt: null, message: "" };

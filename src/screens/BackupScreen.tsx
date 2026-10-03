@@ -335,7 +335,10 @@ export function BackupScreen({
   const driveBusy = driveExporting || driveImporting;
   const autoSync = useSyncExternalStore(subscribeAutoSync, getAutoSyncStatus);
   const autoOn = existingConfig?.driveAutoSyncEnabled ?? true;
-  const autoSyncLine = autoOn
+  const neverSynced = !!existingConfig && existingConfig.driveLastSyncedAt === 0 && autoSync.lastSyncedAt === null;
+  const autoSyncLine = neverSynced
+    ? "Not synced yet. Tap Sync now to make your first backup to Google Drive."
+    : autoOn
     ? describeAutoSync(autoSync)
     : "Automatic sync is off. Use Sync now to back up; you'll be reminded if it's been over 7 days.";
 
