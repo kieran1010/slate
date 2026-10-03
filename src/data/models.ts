@@ -306,6 +306,9 @@ export interface AppConfig {
   // Per-device, not carried in backups. Drives the "not synced for 7
   // days" prompt (components/DriveStalePrompt.tsx).
   driveLastSyncedAt: number;
+  // Whether changes upload to Drive automatically (utils/driveAutoSync.ts).
+  // Only meaningful while driveBackupEnabled; off means manual Sync now.
+  driveAutoSyncEnabled: boolean;
 }
 
 // Settings carried inside the encrypted backup, so restoring on a new
@@ -333,6 +336,7 @@ export const DEFAULT_APP_CONFIG: AppConfig = {
   driveBackupEnabled: false,
   driveFileId: "",
   driveLastSyncedAt: 0,
+  driveAutoSyncEnabled: true,
 };
 
 // ============================================================

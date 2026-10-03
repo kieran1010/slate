@@ -255,6 +255,18 @@ export async function archiveRecord(
   }
 }
 
+// Archives several records of one module in a single transaction.
+export async function archiveRecords(
+  module: ArchivedItem["module"],
+  ids: number[]
+): Promise<void> {
+  if (ids.length === 0) return;
+  const table =
+    module === "ACUTE" ? db.acute : module === "PRE_ASSESSMENT" ? db.preAssess : db.followUp;
+  const patch = { archived: 1 as const, archivedAt: nowIso() };
+  await db.transaction("rw", table, () => Promise.all(ids.map((id) => table.update(id, patch))));
+}
+
 export async function restoreRecord(
   module: ArchivedItem["module"],
   id: number

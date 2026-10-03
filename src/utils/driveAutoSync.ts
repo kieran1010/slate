@@ -1,7 +1,8 @@
 // ============================================================
 // Slate — utils/driveAutoSync.ts
 // ============================================================
-// Automatic Google Drive sync, when "Sync with Google Drive" is on.
+// Automatic Google Drive sync, when "Sync with Google Drive" and its
+// "Sync automatically" option are both on.
 //
 // TRIGGER:
 //   Any change to patients / acute / pre-assess / follow-up schedules
@@ -51,12 +52,20 @@ const DEBOUNCE_MS = 30_000;
 /** A device that hasn't synced for this long is prompted to reconnect. */
 export const DRIVE_STALE_MS = 7 * 24 * 60 * 60 * 1000;
 
-/** True when sync is on but this device hasn't synced in over 7 days (or ever). */
+/**
+ * True when sync is on and this device last synced over 7 days ago. A
+ * device that has never synced (driveLastSyncedAt 0) is not "overdue" —
+ * the Backup screen just offers a first Sync now instead.
+ */
 export function isDriveSyncStale(
   config: { driveBackupEnabled: boolean; driveLastSyncedAt: number },
   now = Date.now()
 ): boolean {
-  return config.driveBackupEnabled && now - config.driveLastSyncedAt > DRIVE_STALE_MS;
+  return (
+    config.driveBackupEnabled &&
+    config.driveLastSyncedAt > 0 &&
+    now - config.driveLastSyncedAt > DRIVE_STALE_MS
+  );
 }
 
 let status: AutoSyncStatus = { state: "idle", lastSyncedAt: null, message: "" };
@@ -65,6 +74,7 @@ let timer: ReturnType<typeof setTimeout> | null = null;
 let started = false;
 let dirty = false;   // changes not yet uploaded
 let running = false;
+let autoEnabled = true; // mirrors config.driveAutoSyncEnabled
 
 function setStatus(next: Partial<AutoSyncStatus>): void {
   status = { ...status, message: "", ...next };
@@ -86,14 +96,16 @@ function schedule(delay: number): void {
 }
 
 function onDataChanged(): void {
+  if (!autoEnabled) return;
   dirty = true;
   // A paused (conflict) or errored sync stays visible until resolved.
   if (status.state !== "conflict") setStatus({ state: "pending", lastSyncedAt: status.lastSyncedAt });
   schedule(DEBOUNCE_MS);
 }
 
-async function runAutoSync(): Promise<void> {
+async function runAutoSync(manual = false): Promise<void> {
   if (running || !dirty) return;
+  if (!manual && !autoEnabled) { dirty = false; return; }
   running = true;
   try {
     const config = await getConfig();
@@ -142,6 +154,9 @@ async function runAutoSync(): Promise<void> {
 export function startDriveAutoSync(): void {
   if (started) return;
   started = true;
+  getConfig()
+    .then((c) => { autoEnabled = c.driveAutoSyncEnabled; })
+    .catch(console.error);
   for (const table of [db.patients, db.acute, db.preAssess, db.followUp]) {
     table.hook("creating", () => { onDataChanged(); });
     table.hook("updating", () => { onDataChanged(); });
@@ -173,7 +188,7 @@ export async function syncDriveNow(): Promise<AutoSyncState> {
   dirty = true;
   if (timer) clearTimeout(timer);
   if (status.state === "conflict") setStatus({ state: "idle", lastSyncedAt: status.lastSyncedAt });
-  await runAutoSync();
+  await runAutoSync(true);
   return status.state;
 }
 
@@ -181,6 +196,24 @@ export async function syncDriveNow(): Promise<AutoSyncState> {
 export function resumeAutoSync(): void {
   if (status.state === "conflict") setStatus({ state: "idle", lastSyncedAt: status.lastSyncedAt });
   if (dirty) schedule(0);
+}
+
+/**
+ * Call when the "Sync automatically" toggle changes. Turning it on marks
+ * the device as having changes to send, so the next run catches up on
+ * anything edited while it was off.
+ */
+export function setAutoSyncEnabled(enabled: boolean): void {
+  autoEnabled = enabled;
+  if (timer) clearTimeout(timer);
+  if (enabled) {
+    dirty = true;
+    setStatus({ state: "pending", lastSyncedAt: status.lastSyncedAt });
+    schedule(DEBOUNCE_MS);
+  } else {
+    dirty = false;
+    setStatus({ state: "idle", lastSyncedAt: status.lastSyncedAt });
+  }
 }
 
 /** Call when the toggle is switched off. */

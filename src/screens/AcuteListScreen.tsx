@@ -3,9 +3,11 @@
 
 import { useState, useMemo } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
-import { Plus, AlertCircle, FileUp, Search, X } from "lucide-react";
-import { listActiveAcute, listPatients } from "../data/repository";
+import { Plus, AlertCircle, FileUp, Search, X, CheckSquare, Square } from "lucide-react";
+import { archiveRecords, listActiveAcute, listPatients } from "../data/repository";
 import { useConfig } from "../hooks/useConfig";
+import { useBulkSelect } from "../hooks/useBulkSelect";
+import { BulkSelectBar } from "../components/BulkSelectBar";
 import type { Urgency, RecordStatus } from "../data/models";
 import type { NavigateFn } from "../types/nav";
 
@@ -50,6 +52,25 @@ export function AcuteListScreen({ navigate }: AcuteListScreenProps) {
     });
   }, [rows, search]);
 
+  const bulk = useBulkSelect((filtered ?? []).map(({ rec }) => rec.id!));
+  const [archiving, setArchiving] = useState(false);
+
+  function openRecord(id: number) {
+    if (bulk.active) bulk.toggle(id);
+    else navigate({ tab: "acute", view: "detail", id });
+  }
+
+  async function archiveSelected() {
+    setArchiving(true);
+    try {
+      await archiveRecords("ACUTE", bulk.selectedIds);
+      bulk.cancel();
+    } catch (err) {
+      console.error("Bulk archive failed:", err);
+      alert("Archive failed — please try again.");
+    } finally { setArchiving(false); }
+  }
+
   if (rows === undefined) {
     return <div className="loading-screen" aria-live="polite">Loading referrals…</div>;
   }
@@ -59,6 +80,14 @@ export function AcuteListScreen({ navigate }: AcuteListScreenProps) {
       <div className="list-header">
         <h1 className="list-header-title">Acute referrals</h1>
         <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+          {bulk.active ? (
+            <button className="btn btn-secondary" onClick={bulk.cancel}>Cancel</button>
+          ) : (<>
+          {filtered!.length > 0 && (
+            <button className="btn-import" onClick={bulk.start} aria-label="Select records">
+              <CheckSquare size={15} aria-hidden />Select
+            </button>
+          )}
           {aiReady && (
             <button className="btn-import" onClick={() => navigate({ tab: "acute", view: "import" })} aria-label="Import acute referral from document">
               <FileUp size={15} aria-hidden />Import
@@ -67,6 +96,7 @@ export function AcuteListScreen({ navigate }: AcuteListScreenProps) {
           <button className="btn btn-primary" onClick={() => navigate({ tab: "acute", view: "detail", id: "new" })} aria-label="New acute referral">
             <Plus size={16} aria-hidden />New
           </button>
+          </>)}
         </div>
       </div>
 
@@ -94,12 +124,20 @@ export function AcuteListScreen({ navigate }: AcuteListScreenProps) {
           const name = patient ? `${patient.surname}, ${patient.givenName}` : rec.nhi;
           return (
             <li key={rec.id}>
-              <div className="patient-card" role="button" tabIndex={0}
+              <div className={`patient-card${bulk.isSelected(rec.id!) ? " patient-card-selected" : ""}`} role="button" tabIndex={0}
+                aria-pressed={bulk.active ? bulk.isSelected(rec.id!) : undefined}
                 aria-label={`${name} — ${urgencyLabel(rec.urgency)}`}
-                onClick={() => navigate({ tab: "acute", view: "detail", id: rec.id! })}
-                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") navigate({ tab: "acute", view: "detail", id: rec.id! }); }}>
+                onClick={() => openRecord(rec.id!)}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") openRecord(rec.id!); }}>
                 <div className="patient-card-top">
-                  <span className="patient-card-name">{name}</span>
+                  <span className="patient-card-top-main">
+                    {bulk.active && (
+                      <span className="patient-card-check" aria-hidden>
+                        {bulk.isSelected(rec.id!) ? <CheckSquare size={18} /> : <Square size={18} />}
+                      </span>
+                    )}
+                    <span className="patient-card-name">{name}</span>
+                  </span>
                   <span className="patient-card-nhi">{rec.nhi}</span>
                 </div>
                 {rec.taskToComplete && <div className="patient-card-task">{rec.taskToComplete}</div>}
@@ -113,6 +151,11 @@ export function AcuteListScreen({ navigate }: AcuteListScreenProps) {
           );
         })}
       </ul>
+
+      {bulk.active && (
+        <BulkSelectBar count={bulk.selectedIds.length} allSelected={bulk.allSelected} busy={archiving}
+          onSelectAll={bulk.selectAll} onClearSelection={bulk.clear} onArchive={() => { void archiveSelected(); }} />
+      )}
     </div>
   );
 }
