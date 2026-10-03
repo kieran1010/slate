@@ -1093,3 +1093,22 @@ body {
   background: rgba(0, 0, 0, 0.45);
 }
 .drive-prompt-overlay .ai-warning { max-width: 420px; width: 100%; }
+
+/* ── Bulk select (list screens) ────────────────────────────── */
+.bulk-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 16px;
+  background: #fff;
+  border-top: 1px solid var(--border);
+  box-shadow: 0 -2px 10px rgba(15, 53, 87, 0.08);
+}
+.bulk-bar-count { font-size: 0.85rem; color: var(--muted); }
+.patient-card-selected { border-color: var(--teal); background: var(--pale); }
+.patient-card-check { display: inline-flex; margin-right: 10px; color: var(--teal); flex-shrink: 0; }
+.patient-card-top-main { display: flex; align-items: flex-start; min-width: 0; }

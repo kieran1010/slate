@@ -51,6 +51,7 @@ import {
   getAutoSyncStatus,
   noteDriveSynced,
   resumeAutoSync,
+  setAutoSyncEnabled,
   stopAutoSync,
   type AutoSyncStatus,
 } from "../utils/driveAutoSync";
@@ -170,6 +171,16 @@ export function BackupScreen({
     saveConfig({ driveBackupEnabled: enabled }).catch((err) => {
       console.error("Drive toggle save failed:", err);
       alert("Couldn't save the Google Drive setting — please try again.");
+    });
+  }
+
+  // Like the main toggle, saves immediately.
+  function handleAutoSyncToggle() {
+    const next = !autoOn;
+    setAutoSyncEnabled(next);
+    saveConfig({ driveAutoSyncEnabled: next }).catch((err) => {
+      console.error("Auto-sync toggle save failed:", err);
+      alert("Couldn't save the automatic sync setting — please try again.");
     });
   }
 
@@ -323,7 +334,10 @@ export function BackupScreen({
   // ── Derived ───────────────────────────────────────────────
   const driveBusy = driveExporting || driveImporting;
   const autoSync = useSyncExternalStore(subscribeAutoSync, getAutoSyncStatus);
-  const autoSyncLine = describeAutoSync(autoSync);
+  const autoOn = existingConfig?.driveAutoSyncEnabled ?? true;
+  const autoSyncLine = autoOn
+    ? describeAutoSync(autoSync)
+    : "Automatic sync is off. Use Sync now to back up; you'll be reminded if it's been over 7 days.";
 
   // ── Render ────────────────────────────────────────────────
   return (
@@ -477,9 +491,21 @@ export function BackupScreen({
                       {driveImporting ? "Restoring…" : "Restore from Drive"}
                     </button>
                   </div>
+                  <div className="toggle-row" style={{ marginTop: "0.75rem" }}>
+                    <span className="toggle-label">
+                      Sync automatically
+                      <span className="toggle-label-sub">
+                        Uploads shortly after you make changes
+                      </span>
+                    </span>
+                    <button className="toggle-track" role="switch" aria-checked={autoOn}
+                      aria-label="Sync automatically" onClick={handleAutoSyncToggle}>
+                      <span className="toggle-thumb" />
+                    </button>
+                  </div>
                   <p className="form-hint" role="status" style={{ marginTop: "0.5rem" }}>
                     {autoSyncLine}
-                    {autoSync.state === "needs-reconnect" && (
+                    {autoOn && autoSync.state === "needs-reconnect" && (
                       <> <button className="btn btn-ghost" onClick={handleDriveReconnect} disabled={driveBusy}>Reconnect</button></>
                     )}
                   </p>
