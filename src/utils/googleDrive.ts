@@ -1,14 +1,16 @@
 // ============================================================
 // Slate — utils/googleDrive.ts
 // ============================================================
-// Google Drive access for the optional encrypted Drive backup.
+// Google Drive access for the optional encrypted Drive sync.
 // Modelled on Tribulator's Drive sync (kieran1010/Tribulator,
 // web/src/lib/googleDrive.js).
 //
 // AUTH:
 //   Google Identity Services token client, talking to Google
-//   directly (Slate has no account of its own). Slate asks for
-//   Drive access only when the user first backs up or restores.
+//   directly (Slate has no account of its own). The consent popup
+//   appears once, on the first Sync now; after that, tokens are
+//   refreshed silently (prompt: "none"), as Tribulator does, so
+//   automatic syncs don't need the user to sign in again.
 //
 // CLIENT ID:
 //   Built in at build time from the VITE_GOOGLE_CLIENT_ID GitHub
@@ -23,8 +25,8 @@
 //
 // STORAGE:
 //   One file, slate-backup.slate, holding the encrypted payload
-//   from crypto.ts. Each backup overwrites it — there is exactly
-//   one copy. The plaintext never reaches Google.
+//   from crypto.ts — every device merges into it (driveSync.ts).
+//   The plaintext never reaches Google.
 //
 // TOKEN:
 //   Kept in memory only (never written to storage) and revoked
@@ -44,7 +46,7 @@ export const BACKUP_FILENAME = "slate-backup.slate";
 // Pasting into a CI variable can pick up stray whitespace.
 const CLIENT_ID = (import.meta.env.VITE_GOOGLE_CLIENT_ID ?? "").replace(/\s+/g, "");
 
-/** False when this build has no client ID, so Drive backup can't work. */
+/** False when this build has no client ID, so Drive sync can't work. */
 export function isDriveConfigured(): boolean {
   return !!CLIENT_ID;
 }
@@ -125,38 +127,74 @@ export function peekDriveToken(): string | null {
   return cachedToken && Date.now() < cachedExpiry ? cachedToken : null;
 }
 
+export interface TokenOptions {
+  /**
+   * false asks Google for a token without showing any UI, which works
+   * once the user has granted access in this browser. Automatic syncs use
+   * it so they fail quietly rather than throwing a popup at the user.
+   */
+  interactive?: boolean;
+  /**
+   * Bounds a silent request. Neither loading Google's script nor the
+   * token request has a timeout of its own, so on a poor connection a
+   * background sync would otherwise hang. Interactive requests never
+   * pass one: the user may be taking their time in a real consent popup.
+   */
+  timeoutMs?: number;
+}
+
 /**
- * Returns a Drive access token, showing Google's consent popup
- * the first time (or when the cached token has expired). Must be
- * called from a user gesture so the popup isn't blocked.
+ * Returns a Drive access token. Interactive requests show Google's
+ * consent popup the first time and must come from a tap so the popup
+ * isn't blocked.
  */
-export async function getDriveToken(): Promise<string> {
-  if (!CLIENT_ID) throw new Error("Google Drive backup isn't set up in this version of Slate.");
+export async function getDriveToken({ interactive = true, timeoutMs }: TokenOptions = {}): Promise<string> {
+  if (!CLIENT_ID) throw new Error("Google Drive sync isn't set up in this version of Slate.");
   if (cachedToken && Date.now() < cachedExpiry) return cachedToken;
 
-  const oauth2 = await loadGis();
-  return new Promise((resolve, reject) => {
-    const client = oauth2.initTokenClient({
-      client_id: CLIENT_ID,
-      scope: DRIVE_SCOPE,
-      prompt: "",
-      callback: (response) => {
-        if (!response.access_token) {
-          reject(new Error(response.error_description || response.error || "Google authorisation failed."));
-          return;
-        }
-        cachedToken = response.access_token;
-        // Expire a minute early so a request never starts on a dying token.
-        cachedExpiry = Date.now() + (Number(response.expires_in) || 3600) * 1000 - 60_000;
-        resolve(cachedToken);
-      },
-      error_callback: (error) =>
-        reject(new Error(error.type === "popup_closed"
-          ? "Google sign-in was cancelled."
-          : error.message || "Google authorisation failed.")),
+  const attempt = (async () => {
+    const oauth2 = await loadGis();
+    return new Promise<string>((resolve, reject) => {
+      const client = oauth2.initTokenClient({
+        client_id: CLIENT_ID,
+        scope: DRIVE_SCOPE,
+        prompt: interactive ? "" : "none",
+        callback: (response) => {
+          if (!response.access_token) {
+            reject(new Error(response.error_description || response.error || "Google authorisation failed."));
+            return;
+          }
+          cachedToken = response.access_token;
+          // Expire a minute early so a request never starts on a dying token.
+          cachedExpiry = Date.now() + (Number(response.expires_in) || 3600) * 1000 - 60_000;
+          resolve(cachedToken);
+        },
+        error_callback: (error) =>
+          reject(new Error(error.type === "popup_closed"
+            ? "Google sign-in was cancelled."
+            : error.message || "Google authorisation failed.")),
+      });
+      client.requestAccessToken();
     });
-    client.requestAccessToken();
+  })();
+
+  if (!timeoutMs) return attempt;
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error("Could not reach Google. Check your connection and try again.")),
+      timeoutMs
+    );
   });
+  try {
+    return await Promise.race([attempt, timeout]);
+  } finally {
+    clearTimeout(timer);
+    // If the timeout won, the real attempt may still settle later — a
+    // success harmlessly fills the token cache; swallow a failure.
+    attempt.catch(() => {});
+  }
 }
 
 /** Revokes the Drive grant for this session. Best effort. */
@@ -187,27 +225,35 @@ async function driveFetch(token: string, url: string, init: RequestInit = {}): P
 
   if (res.status === 401) {
     forgetToken();
-    throw new Error("Google sign-in expired. Please try again.");
+    throw new Error("Google sign-in expired. Tap Sync now to reconnect.");
   }
   if (res.status === 403) {
-    forgetToken();
     if (/has not been used in project|is disabled/i.test(message)) {
+      // The token is fine; the fix is in the Google Cloud console.
       throw new Error("The Google Drive API isn't enabled for Slate's Google Cloud project.");
     }
+    forgetToken();
     if (/insufficient/i.test(message)) {
-      throw new Error("Drive access wasn't granted. Try again and allow access when Google asks.");
+      throw new Error("Drive access wasn't granted. Switch Google Drive sync off and on again, and allow access when Google asks.");
     }
     throw new Error("Google Drive refused the request.");
   }
+  if (res.status === 404) throw new DriveNotFoundError("Drive file not found.");
   throw new Error(`Google Drive request failed (${res.status}).`);
 }
+
+/** The file asked for no longer exists (or belongs to another account). */
+export class DriveNotFoundError extends Error {}
 
 export interface DriveFile {
   id: string;
   modifiedTime: string;
+  // Increments on every change to the file, which is what lets a sync
+  // notice that another device wrote while it was merging.
+  version: string;
 }
 
-const FILE_FIELDS = "id,modifiedTime";
+const FILE_FIELDS = "id,modifiedTime,version";
 
 /**
  * Finds Slate's backup file. With drive.file, Drive only returns
@@ -221,6 +267,16 @@ export async function findBackupFile(token: string): Promise<DriveFile | null> {
   );
   const data = (await res.json()) as { files?: DriveFile[] };
   return data.files?.[0] ?? null;
+}
+
+export async function getFileMetadata(token: string, fileId: string): Promise<DriveFile> {
+  const res = await driveFetch(token, `${FILES_API}/${encodeURIComponent(fileId)}?fields=${FILE_FIELDS}`);
+  return (await res.json()) as DriveFile;
+}
+
+/** Permanently deletes the backup file (Slate can only touch its own). */
+export async function deleteBackupFile(token: string, fileId: string): Promise<void> {
+  await driveFetch(token, `${FILES_API}/${encodeURIComponent(fileId)}`, { method: "DELETE" });
 }
 
 /** Downloads the backup file's (encrypted) contents. */

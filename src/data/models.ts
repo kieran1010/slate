@@ -298,17 +298,20 @@ export interface AppConfig {
   encryptionPassphrase: string;
   // Google Drive backup — optional, warning-gated.
   driveBackupEnabled: boolean;
-  // Drive file ID of the backup this device last wrote or restored.
-  // Empty means this device hasn't used the Drive backup
-  // yet, which is what triggers the overwrite warning in BackupScreen.
+  // Drive file ID of the sync file this device last synced with, so it
+  // can go straight to it. Empty means it is looked up by name.
   driveFileId: string;
   // When this device last synced with Drive (epoch ms; 0 = never).
   // Per-device, not carried in backups. Drives the "not synced for 7
   // days" prompt (components/DriveStalePrompt.tsx).
   driveLastSyncedAt: number;
-  // Whether changes upload to Drive automatically (utils/driveAutoSync.ts).
-  // Only meaningful while driveBackupEnabled; off means manual Sync now.
+  // Whether Drive syncs automatically — on opening Slate and shortly
+  // after each change (utils/driveSync.ts). Only meaningful while
+  // driveBackupEnabled; off means manual Sync now.
   driveAutoSyncEnabled: boolean;
+  // When each synced setting (BACKUP_SETTINGS_FIELDS) was last changed
+  // on any device (UTC ISO), so Drive sync can keep the latest of each.
+  settingsFieldTimes: Record<string, string>;
 }
 
 // Settings carried inside the encrypted backup, so restoring on a new
@@ -337,6 +340,7 @@ export const DEFAULT_APP_CONFIG: AppConfig = {
   driveFileId: "",
   driveLastSyncedAt: 0,
   driveAutoSyncEnabled: true,
+  settingsFieldTimes: {},
 };
 
 // ============================================================

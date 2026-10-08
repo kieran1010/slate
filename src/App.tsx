@@ -33,10 +33,9 @@ import { FollowUpDetailScreen } from "./screens/FollowUpDetailScreen";
 import { ArchiveScreen } from "./screens/ArchiveScreen";
 import { ImportScreen } from "./screens/ImportScreen";
 import { SettingsScreen } from "./screens/SettingsScreen";
-import { BackupScreen } from "./screens/BackupScreen";
 import { ensureActiveProfile } from "./data/profiles";
 import { DriveStalePrompt } from "./components/DriveStalePrompt";
-import { startDriveAutoSync } from "./utils/driveAutoSync";
+import { startDriveSync, resetDriveSync } from "./utils/driveSync";
 import type { Profile } from "./data/db";
 import type { NavState, Tab, NavigateFn } from "./types/nav";
 
@@ -56,7 +55,7 @@ function LocalDataBanner({ onDismiss }: { onDismiss: () => void }) {
     <div className="local-data-banner" role="status" aria-live="polite">
       <p className="local-data-banner-text">
         <strong>Data is stored on this device only.</strong>{" "}
-        Use Backup to keep an encrypted copy in a file or your Google Drive, and to restore it on another device.
+        Use Backup &amp; sync in Settings to keep an encrypted copy in a file or your Google Drive, and to sync it with your other devices.
       </p>
       <button
         className="local-data-banner-dismiss"
@@ -75,7 +74,7 @@ export default function App() {
 
   useEffect(() => {
     ensureActiveProfile()
-      .then((p) => { startDriveAutoSync(); setProfile(p); })
+      .then((p) => { startDriveSync(); setProfile(p); })
       .catch(console.error);
   }, []);
 
@@ -104,11 +103,6 @@ export default function App() {
   // (which closes over the initial value) can read the current state.
   const settingsOpenRef = useRef(false);
   useEffect(() => { settingsOpenRef.current = settingsOpen; }, [settingsOpen]);
-
-  // ── Backup modal ───────────────────────────────────────────
-  const [backupOpen, setBackupOpen] = useState(false);
-  const backupOpenRef = useRef(false);
-  useEffect(() => { backupOpenRef.current = backupOpen; }, [backupOpen]);
 
   // ── Local data warning banner ──────────────────────────────
   // Shown until the user dismisses it; dismissal is stored in
@@ -143,15 +137,7 @@ export default function App() {
         return;
       }
 
-      // PRIORITY 1 — Backup open: hardware-back closes it the same way
-      // Settings does (checked first since Backup renders on top of
-      // Settings if both are open).
-      if (backupOpenRef.current) {
-        setBackupOpen(false);
-        return;
-      }
-
-      // PRIORITY 1b — Settings open: hardware-back closes it and
+      // PRIORITY 1 — Settings open: hardware-back closes it and
       // reveals whatever screen is behind, instead of navigating or
       // exiting. The history entry pushed when Settings opened has
       // already been consumed by THIS popstate, so we just flip state.
@@ -261,23 +247,6 @@ export default function App() {
     setSettingsOpen(false);
   }, []);
 
-  // ── Backup open / close ─────────────────────────────────────
-  // Mirrors Settings open/close above — same history push/pop dance so
-  // the Android hardware back key closes Backup instead of navigating
-  // away or exiting the app.
-  const openBackup = useCallback(() => {
-    setBackupOpen(true);
-    window.history.pushState({ slateNav: true, backup: true }, "");
-  }, []);
-
-  const closeBackup = useCallback(() => {
-    if (backupOpenRef.current) {
-      suppressNextPopState.current = true;
-      window.history.back();
-    }
-    setBackupOpen(false);
-  }, []);
-
   // ── Reactive re-init after "Erase this device" ─────────────
   // Called by SettingsScreen AFTER it has cleared all local data
   // (including the profiles table). Because the
@@ -293,6 +262,7 @@ export default function App() {
     // now-empty DB before ensureActiveProfile() has run, which throws
     // "No active profile" and leaves a white screen.
     setProfile(null);
+    resetDriveSync();
     closeSettings();
     try {
       const fresh = await ensureActiveProfile();
@@ -384,7 +354,7 @@ export default function App() {
   if (!profile) {
     return (
       <div className="app-shell">
-        <Brand appName={APP_NAME} onSettingsOpen={openSettings} onBackupOpen={openBackup} />
+        <Brand appName={APP_NAME} onSettingsOpen={openSettings} />
         {!bannerDismissed && (
           <LocalDataBanner onDismiss={dismissBanner} />
         )}
@@ -398,7 +368,7 @@ export default function App() {
   // ── Main shell ─────────────────────────────────────────────
   return (
     <div className="app-shell">
-      <Brand appName={APP_NAME} onSettingsOpen={openSettings} onBackupOpen={openBackup} />
+      <Brand appName={APP_NAME} onSettingsOpen={openSettings} />
 
       {/* Local data warning — shown until permanently dismissed */}
       {!bannerDismissed && (
@@ -418,7 +388,7 @@ export default function App() {
       <TabBar active={nav.tab} onSelect={selectTab} />
 
       {/* Shown when Drive sync is on but hasn't run for over 7 days */}
-      <DriveStalePrompt onOpenBackup={openBackup} />
+      <DriveStalePrompt onOpenSettings={openSettings} />
 
       {/* Settings modal — full-screen overlay above the shell.
           Rendered here (not inside <main>) so it covers the
@@ -437,18 +407,6 @@ export default function App() {
         </div>
       )}
 
-      {/* Backup modal — same full-screen overlay treatment as Settings.
-          Rendered after it in the DOM so it sits on top if both are open. */}
-      {backupOpen && (
-        <div
-          className="settings-overlay"
-          role="dialog"
-          aria-modal="true"
-          aria-label="Backup"
-        >
-          <BackupScreen onClose={closeBackup} />
-        </div>
-      )}
     </div>
   );
 }
