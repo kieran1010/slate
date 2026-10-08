@@ -29,8 +29,10 @@
 //   src/data/repository.ts
 // ============================================================
 
+import Dexie, { type Table } from "dexie";
 import {
   db,
+  type StoredPatient,
   type StoredAcute,
   type StoredPreAssess,
   type StoredFollowUp,
@@ -45,7 +47,16 @@ import type {
   Urgency,
   DischargeToFollowUpRequest,
 } from "./models";
-import { DEFAULT_APP_CONFIG } from "./models";
+import { DEFAULT_APP_CONFIG, BACKUP_SETTINGS_FIELDS } from "./models";
+import {
+  newRowMeta,
+  stampChanges,
+  normaliseIncoming,
+  mergeModule,
+  mergePatients,
+  mergeSettings,
+  type FieldTimes,
+} from "./syncMerge";
 import { getActiveProfileId } from "./profiles";
 import { nowIso } from "./dates";
 
@@ -91,6 +102,32 @@ async function requireActiveProfileId(): Promise<string> {
     );
   }
   return id;
+}
+
+// ── Sync stamping ────────────────────────────────────────────
+// Every clinical write records which fields it changed, and when, so
+// Drive sync can merge per field (see syncMerge.ts). Writes made BY a
+// sync are tagged so the sync engine doesn't treat them as new edits.
+
+type ClinicalTable = Table<StoredAcute, number> | Table<StoredPreAssess, number> | Table<StoredFollowUp, number>;
+
+async function updateStamped(table: ClinicalTable, id: number, changes: Record<string, unknown>): Promise<void> {
+  const rows = table as unknown as Table<Record<string, unknown>, number>;
+  await db.transaction("rw", rows, async () => {
+    const existing = await rows.get(id);
+    if (!existing) return;
+    await rows.update(id, {
+      ...changes,
+      fieldTimes: stampChanges(existing, changes),
+    });
+  });
+}
+
+const syncTransactions = new WeakSet<object>();
+
+/** True when the current write belongs to a Drive sync (not a user edit). */
+export function isSyncTransaction(tx: object | null | undefined): boolean {
+  return !!tx && syncTransactions.has(tx);
 }
 
 // ── Sort helpers (applied in memory) ─────────────────────────
@@ -162,7 +199,14 @@ export async function listPatients(): Promise<Patient[]> {
 // Create or update the identity record (keyed on NHI per profile).
 export async function upsertPatient(patient: Patient): Promise<void> {
   const pid = await requireActiveProfileId();
-  await db.patients.put({ ...patient, profileId: pid });
+  await db.transaction("rw", db.patients, async () => {
+    const existing = await db.patients.get([pid, patient.nhi]);
+    await db.patients.put({
+      ...patient,
+      profileId: pid,
+      fieldTimes: stampChanges(existing as Record<string, unknown> | undefined, { ...patient }),
+    });
+  });
 }
 
 // ============================================================
@@ -197,8 +241,9 @@ export async function listActiveFollowUp(): Promise<StoredFollowUp[]> {
 export async function createAcute(input: NewAcute): Promise<number> {
   const profileId = await requireActiveProfileId();
   const now = nowIso();
+  const fields = { ...input, archived: 0 as const, archivedAt: "" };
   const row: StoredAcute = {
-    ...input, profileId, archived: 0, archivedAt: "", createdAt: now, updatedAt: now,
+    ...fields, ...newRowMeta(fields), profileId, createdAt: now, updatedAt: now,
   };
   return (await db.acute.add(row)) as number;
 }
@@ -206,8 +251,9 @@ export async function createAcute(input: NewAcute): Promise<number> {
 export async function createPreAssess(input: NewPreAssess): Promise<number> {
   const profileId = await requireActiveProfileId();
   const now = nowIso();
+  const fields = { ...input, archived: 0 as const, archivedAt: "" };
   const row: StoredPreAssess = {
-    ...input, profileId, archived: 0, archivedAt: "", createdAt: now, updatedAt: now,
+    ...fields, ...newRowMeta(fields), profileId, createdAt: now, updatedAt: now,
   };
   return (await db.preAssess.add(row)) as number;
 }
@@ -215,8 +261,9 @@ export async function createPreAssess(input: NewPreAssess): Promise<number> {
 export async function createFollowUp(input: NewFollowUp): Promise<number> {
   const profileId = await requireActiveProfileId();
   const now = nowIso();
+  const fields = { ...input, archived: 0 as const, archivedAt: "" };
   const row: StoredFollowUp = {
-    ...input, profileId, archived: 0, archivedAt: "", createdAt: now, updatedAt: now,
+    ...fields, ...newRowMeta(fields), profileId, createdAt: now, updatedAt: now,
   };
   return (await db.followUp.add(row)) as number;
 }
@@ -226,15 +273,15 @@ export async function createFollowUp(input: NewFollowUp): Promise<number> {
 // ============================================================
 
 export async function updateAcute(id: number, changes: AcuteChanges): Promise<void> {
-  await db.acute.update(id, { ...changes, updatedAt: nowIso() });
+  await updateStamped(db.acute, id, { ...changes, updatedAt: nowIso() });
 }
 
 export async function updatePreAssess(id: number, changes: PreAssessChanges): Promise<void> {
-  await db.preAssess.update(id, { ...changes, updatedAt: nowIso() });
+  await updateStamped(db.preAssess, id, { ...changes, updatedAt: nowIso() });
 }
 
 export async function updateFollowUp(id: number, changes: FollowUpChanges): Promise<void> {
-  await db.followUp.update(id, { ...changes, updatedAt: nowIso() });
+  await updateStamped(db.followUp, id, { ...changes, updatedAt: nowIso() });
 }
 
 // ============================================================
@@ -249,9 +296,9 @@ export async function archiveRecord(
 ): Promise<void> {
   const patch = { archived: 1 as const, archivedAt: nowIso() };
   switch (module) {
-    case "ACUTE": await db.acute.update(id, patch); break;
-    case "PRE_ASSESSMENT": await db.preAssess.update(id, patch); break;
-    case "FOLLOW_UP": await db.followUp.update(id, patch); break;
+    case "ACUTE": await updateStamped(db.acute, id, patch); break;
+    case "PRE_ASSESSMENT": await updateStamped(db.preAssess, id, patch); break;
+    case "FOLLOW_UP": await updateStamped(db.followUp, id, patch); break;
   }
 }
 
@@ -264,7 +311,7 @@ export async function archiveRecords(
   const table =
     module === "ACUTE" ? db.acute : module === "PRE_ASSESSMENT" ? db.preAssess : db.followUp;
   const patch = { archived: 1 as const, archivedAt: nowIso() };
-  await db.transaction("rw", table, () => Promise.all(ids.map((id) => table.update(id, patch))));
+  await db.transaction("rw", table, () => Promise.all(ids.map((id) => updateStamped(table, id, patch))));
 }
 
 export async function restoreRecord(
@@ -273,9 +320,9 @@ export async function restoreRecord(
 ): Promise<void> {
   const patch = { archived: 0 as const, archivedAt: "" };
   switch (module) {
-    case "ACUTE": await db.acute.update(id, patch); break;
-    case "PRE_ASSESSMENT": await db.preAssess.update(id, patch); break;
-    case "FOLLOW_UP": await db.followUp.update(id, patch); break;
+    case "ACUTE": await updateStamped(db.acute, id, patch); break;
+    case "PRE_ASSESSMENT": await updateStamped(db.preAssess, id, patch); break;
+    case "FOLLOW_UP": await updateStamped(db.followUp, id, patch); break;
   }
 }
 
@@ -389,12 +436,11 @@ export async function commitMoveToFollowUp(
   let newId = 0;
   await db.transaction("rw", db.acute, db.preAssess, db.followUp, async () => {
     if (module === "ACUTE") {
-      await db.acute.update(sourceId, { archived: 1, archivedAt: now });
+      await updateStamped(db.acute, sourceId, { archived: 1, archivedAt: now });
     } else {
-      await db.preAssess.update(sourceId, { archived: 1, archivedAt: now });
+      await updateStamped(db.preAssess, sourceId, { archived: 1, archivedAt: now });
     }
-    const fu: StoredFollowUp = {
-      profileId,
+    const fields = {
       nhi: draft.nhi,
       intervention: draft.intervention,
       interventionDate: draft.interventionDate,
@@ -403,12 +449,11 @@ export async function commitMoveToFollowUp(
       outcome: "",
       phoneNumber: draft.phoneNumber,
       notes: draft.notes,
-      status: "PENDING",
-      archived: 0,
+      status: "PENDING" as const,
+      archived: 0 as const,
       archivedAt: "",
-      createdAt: now,
-      updatedAt: now,
     };
+    const fu: StoredFollowUp = { ...fields, ...newRowMeta(fields), profileId, createdAt: now, updatedAt: now };
     newId = (await db.followUp.add(fu)) as number;
   });
   return newId;
@@ -419,7 +464,11 @@ export async function commitMoveToFollowUp(
 // ============================================================
 
 export async function getConfig(): Promise<AppConfig> {
-  const pid = await requireActiveProfileId();
+  // getActiveProfileId directly, like the other reads, rather than via
+  // requireActiveProfileId: the extra async layer loses Dexie's live-query
+  // tracking, so useLiveQuery(getConfig) never saw config changes.
+  const pid = await getActiveProfileId();
+  if (!pid) throw new Error("No active profile. Call ensureActiveProfile() during app startup.");
   const row = await db.config.get(pid);
   // Always spread DEFAULT_APP_CONFIG first so that any new fields added
   // to AppConfig after a user's config was first stored are present with
@@ -436,8 +485,16 @@ export async function getConfig(): Promise<AppConfig> {
 
 export async function saveConfig(changes: Partial<AppConfig>): Promise<void> {
   const pid = await requireActiveProfileId();
-  const existing = (await db.config.get(pid)) ?? { ...DEFAULT_APP_CONFIG, profileId: pid };
-  await db.config.put({ ...existing, ...changes, profileId: pid });
+  await db.transaction("rw", db.config, async () => {
+    const existing = (await db.config.get(pid)) ?? { ...DEFAULT_APP_CONFIG, profileId: pid };
+    // Stamp the synced settings this save actually changes (see syncMerge.ts).
+    const settingsFieldTimes = { ...(existing.settingsFieldTimes ?? {}) };
+    const now = new Date().toISOString();
+    for (const field of BACKUP_SETTINGS_FIELDS) {
+      if (field in changes && changes[field] !== existing[field]) settingsFieldTimes[field] = now;
+    }
+    await db.config.put({ ...existing, ...changes, settingsFieldTimes, profileId: pid });
+  });
 }
 
 // ============================================================
@@ -477,7 +534,11 @@ export async function listAllFollowUp(): Promise<StoredFollowUp[]> {
 export interface ImportPayload {
   version: 1;
   exportedAt: string;
-  patients: Patient[];
+  patients: Omit<StoredPatient, "profileId">[];
+  // Rows carry their sync bookkeeping (uid, fieldTimes) when the backup
+  // came from a Slate with Drive sync; older backups don't, and older
+  // versions of Slate keep the extra fields untouched, so the format
+  // version stays 1.
   acute: Omit<StoredAcute, "profileId" | "id">[];
   preAssess: Omit<StoredPreAssess, "profileId" | "id">[];
   followUp: Omit<StoredFollowUp, "profileId" | "id">[];
@@ -485,15 +546,18 @@ export interface ImportPayload {
   // before settings were included don't have it, and older versions of
   // Slate simply ignore it, so the format version stays 1.
   settings?: Partial<BackupSettings>;
+  // When each of those settings was last changed (for Drive sync).
+  settingsFieldTimes?: FieldTimes;
 }
 
 // REPLACE wipes all clinical data for the profile first, then inserts the
 // backup — the result is exactly the backup's contents.
-// MERGE keeps existing data and adds the backup's records alongside it.
-// Patients are upserted (keyed on nhi, so no duplicates there), but
-// sub-records (acute/preAssess/followUp) have no stable cross-device id,
-// so a record present in both copies will appear twice — the user can
-// archive/delete the duplicate. Acceptable trade-off for "combine" mode.
+// MERGE keeps existing data and merges the backup in with the same rules
+// as Drive sync (syncMerge.ts): a record in both copies is matched by its
+// uid and merged field by field, so it doesn't appear twice. Records from
+// a backup made before uids existed can only be matched on NHI + created
+// time against records that also predate uids; otherwise they're added
+// alongside, and the user can archive any duplicate.
 export type ImportMode = "replace" | "merge";
 
 export async function hasAnyLocalData(): Promise<boolean> {
@@ -527,22 +591,87 @@ export async function importData(
         await db.acute.where("profileId").equals(pid).delete();
         await db.preAssess.where("profileId").equals(pid).delete();
         await db.followUp.where("profileId").equals(pid).delete();
+        for (const p of payload.patients) {
+          await db.patients.put({ ...p, profileId: pid });
+        }
+        // No id on sub-records → Dexie assigns a fresh auto-increment PK,
+        // avoiding any collision with existing/deleted rows.
+        for (const r of payload.acute) await db.acute.add({ ...normaliseIncoming(r), profileId: pid });
+        for (const r of payload.preAssess) await db.preAssess.add({ ...normaliseIncoming(r), profileId: pid });
+        for (const r of payload.followUp) await db.followUp.add({ ...normaliseIncoming(r), profileId: pid });
+        return;
       }
+      await mergeRecordsInto(pid, payload);
+    }
+  );
+}
 
-      // No id on sub-records → Dexie assigns a fresh auto-increment PK,
-      // avoiding any collision with existing/deleted rows.
-      for (const p of payload.patients) {
-        await db.patients.put({ ...p, profileId: pid });
-      }
-      for (const r of payload.acute) {
-        await db.acute.add({ ...r, profileId: pid });
-      }
-      for (const r of payload.preAssess) {
-        await db.preAssess.add({ ...r, profileId: pid });
-      }
-      for (const r of payload.followUp) {
-        await db.followUp.add({ ...r, profileId: pid });
-      }
+export interface SyncMergeStats {
+  /** Records (any module) that arrived from the other copy. */
+  added: number;
+  /** Records on this device that took changes from the other copy. */
+  updated: number;
+  /** True when any synced setting took the other copy's value. */
+  settingsChanged: boolean;
+}
+
+// Merges a payload's patients and records into the profile. Must run
+// inside a rw transaction over patients, acute, preAssess and followUp.
+async function mergeRecordsInto(pid: string, payload: ImportPayload): Promise<{ added: number; updated: number }> {
+  let added = 0;
+  let updated = 0;
+
+  const patients = mergePatients(
+    await db.patients.where("profileId").equals(pid).toArray(),
+    payload.patients.map((p) => ({ ...p, profileId: pid }))
+  );
+  for (const p of [...patients.changed, ...patients.added]) await db.patients.put({ ...p, profileId: pid });
+
+  async function mergeTable<T extends StoredAcute | StoredPreAssess | StoredFollowUp>(
+    table: Table<T, number>,
+    remote: Omit<T, "profileId" | "id">[]
+  ) {
+    const local = await table.where("profileId").equals(pid).toArray();
+    const result = mergeModule(local as Record<string, unknown>[], remote as Record<string, unknown>[]);
+    for (const row of result.changed) await table.put(row as T);
+    for (const row of result.added) await table.add({ ...row, profileId: pid } as T);
+    added += result.added.length;
+    updated += result.changed.length;
+  }
+  await mergeTable(db.acute, payload.acute);
+  await mergeTable(db.preAssess, payload.preAssess);
+  await mergeTable(db.followUp, payload.followUp);
+  return { added, updated };
+}
+
+/**
+ * Drive sync: merges the copy from Drive (null if there isn't one yet)
+ * into this device — records and settings — in one transaction. The
+ * transaction is tagged (isSyncTransaction) so these writes don't count
+ * as fresh edits that need syncing again.
+ */
+export async function applySyncPayload(remote: ImportPayload | null): Promise<SyncMergeStats> {
+  const pid = await requireActiveProfileId();
+  if (!remote) return { added: 0, updated: 0, settingsChanged: false };
+  return db.transaction(
+    "rw",
+    [db.patients, db.acute, db.preAssess, db.followUp, db.config],
+    async () => {
+      if (Dexie.currentTransaction) syncTransactions.add(Dexie.currentTransaction);
+      const { added, updated } = await mergeRecordsInto(pid, remote);
+
+      const existing = (await db.config.get(pid)) ?? { ...DEFAULT_APP_CONFIG, profileId: pid };
+      const merged = mergeSettings(
+        existing as unknown as Record<string, unknown>,
+        existing.settingsFieldTimes ?? {},
+        (remote.settings ?? {}) as Record<string, unknown>,
+        remote.settingsFieldTimes ?? {},
+        DEFAULT_APP_CONFIG as unknown as Record<string, unknown>,
+        BACKUP_SETTINGS_FIELDS
+      );
+      const settingsChanged = Object.keys(merged.changes).length > 0;
+      await db.config.put({ ...existing, ...merged.changes, settingsFieldTimes: merged.fieldTimes, profileId: pid });
+      return { added, updated, settingsChanged };
     }
   );
 }

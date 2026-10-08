@@ -14,17 +14,20 @@
 //   src/components/Brand.tsx
 // ============================================================
 
-import { Settings, DatabaseBackup } from "lucide-react";
+import { useSyncExternalStore } from "react";
+import { Settings, CloudUpload } from "lucide-react";
+import { subscribeDriveSync, getDriveSyncStatus } from "../utils/driveSync";
 
 interface BrandProps {
   appName: string;
   // Called when the user taps the gear icon to open Settings.
   onSettingsOpen: () => void;
-  // Called when the user taps the backup icon to open Backup.
-  onBackupOpen: () => void;
 }
 
-export function Brand({ appName, onSettingsOpen, onBackupOpen }: BrandProps) {
+export function Brand({ appName, onSettingsOpen }: BrandProps) {
+  // A silent Drive token refresh can briefly flash Google's page; a small
+  // cue while syncing makes that read as something Slate is doing.
+  const syncing = useSyncExternalStore(subscribeDriveSync, getDriveSyncStatus).state === "syncing";
   return (
     <header className="app-header">
       <div className="brand">
@@ -51,13 +54,9 @@ export function Brand({ appName, onSettingsOpen, onBackupOpen }: BrandProps) {
       </div>
       {/* margin-left:auto on .header-actions pushes these to the far right */}
       <div className="header-actions">
-        <button
-          className="brand-settings-btn"
-          onClick={onBackupOpen}
-          aria-label="Open backup"
-        >
-          <DatabaseBackup size={20} aria-hidden />
-        </button>
+        <span className={`sync-indicator${syncing ? " visible" : ""}`} title="Syncing with Google Drive" aria-hidden>
+          <CloudUpload size={16} />
+        </span>
         <button
           className="brand-settings-btn"
           onClick={onSettingsOpen}

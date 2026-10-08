@@ -44,6 +44,7 @@
 // ============================================================
 
 import Dexie, { type Table } from "dexie";
+import { withLegacyFieldTimes, type FieldTimes, type SyncMeta } from "./syncMerge";
 import type {
   Patient,
   AcuteRecord,
@@ -78,10 +79,12 @@ export interface MetaRow {
 //   • id        — auto-increment key for sub-records. Optional in
 //                 the type because Dexie assigns it on insert;
 //                 every record READ back from the DB will have one.
-export type StoredPatient = Patient & { profileId: string };
-export type StoredAcute = AcuteRecord & { profileId: string; id?: number };
-export type StoredPreAssess = PreAssessRecord & { profileId: string; id?: number };
-export type StoredFollowUp = FollowUpRecord & { profileId: string; id?: number };
+// SyncMeta (uid, fieldTimes, uidMigrated) is Drive-sync bookkeeping —
+// see syncMerge.ts. Patients are keyed on NHI, so they need only times.
+export type StoredPatient = Patient & { profileId: string; fieldTimes?: FieldTimes };
+export type StoredAcute = AcuteRecord & SyncMeta & { profileId: string; id?: number };
+export type StoredPreAssess = PreAssessRecord & SyncMeta & { profileId: string; id?: number };
+export type StoredFollowUp = FollowUpRecord & SyncMeta & { profileId: string; id?: number };
 export type StoredConfig = AppConfig & { profileId: string };
 
 // ── The typed database handle ────────────────────────────────
@@ -123,4 +126,20 @@ db.version(1).stores({
   preAssess: "++id, [profileId+nhi], [profileId+archived], profileId",
   followUp: "++id, [profileId+nhi], [profileId+archived], profileId",
   config: "profileId",
+});
+
+// v2 — two-way Drive sync. No index changes; gives every existing
+// clinical row a cross-device uid, and fixes each field's edit time at
+// the row's current updatedAt (see syncMerge.ts). `uidMigrated` lets the
+// merge recognise the same legacy row upgraded separately on two devices.
+db.version(2).stores({}).upgrade(async (tx) => {
+  for (const name of ["acute", "preAssess", "followUp"]) {
+    await tx.table(name).toCollection().modify((row: Record<string, unknown> & SyncMeta) => {
+      Object.assign(row, withLegacyFieldTimes(row));
+      if (!row.uid) {
+        row.uid = crypto.randomUUID();
+        row.uidMigrated = 1;
+      }
+    });
+  }
 });

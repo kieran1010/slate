@@ -102,6 +102,9 @@ export async function encryptPayload(
   ].join("|");
 }
 
+/** Thrown when a payload is well-formed but the passphrase doesn't open it. */
+export class WrongPassphraseError extends Error {}
+
 /**
  * Decrypts a payload produced by encryptPayload().
  * Throws a user-friendly Error if the format is wrong or the
@@ -131,7 +134,7 @@ export async function decryptPayload(
   } catch {
     // AES-GCM authentication tag failure = wrong passphrase or
     // corrupted data. Surface a clear message.
-    throw new Error(
+    throw new WrongPassphraseError(
       "Decryption failed. Check your passphrase and try again."
     );
   }

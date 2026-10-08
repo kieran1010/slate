@@ -167,11 +167,16 @@ export async function buildEncryptedPayload(
   const payload: ImportPayload = {
     version: 1,
     exportedAt: new Date().toISOString(),
-    patients,
+    patients: patients.map((p) => {
+      const { profileId: _p, ...r } = p as typeof p & { profileId?: string };
+      void _p;
+      return r;
+    }),
     acute: acute.map(({ profileId: _p, id: _i, ...r }) => r),
     preAssess: preAssess.map(({ profileId: _p, id: _i, ...r }) => r),
     followUp: followUp.map(({ profileId: _p, id: _i, ...r }) => r),
     settings,
+    settingsFieldTimes: config.settingsFieldTimes,
   };
 
   return encryptPayload(JSON.stringify(payload), passphrase);
@@ -217,15 +222,14 @@ function countByLifecycle(records: { archived: 0 | 1 }[]): ModuleImportCounts {
 }
 
 /**
- * Decrypts an encrypted payload string and imports the data.
- * Shared by the file import and Google Drive restore flows.
- * Returns record counts for the success message.
+ * Decrypts an encrypted payload string and checks its shape. The
+ * settings are filtered to known, correctly-typed fields. Throws
+ * WrongPassphraseError (crypto.ts) if the passphrase doesn't open it.
  */
-export async function importFromEncryptedString(
+export async function decryptBackup(
   encryptedText: string,
-  passphrase: string,
-  mode: ImportMode = "replace"
-): Promise<ImportResultCounts> {
+  passphrase: string
+): Promise<ImportPayload> {
   const decrypted = await decryptPayload(encryptedText, passphrase);
 
   let payload: ImportPayload;
@@ -240,12 +244,29 @@ export async function importFromEncryptedString(
       `Unsupported backup version (${String(payload.version)}).`
     );
   }
+  for (const list of [payload.patients, payload.acute, payload.preAssess, payload.followUp]) {
+    if (!Array.isArray(list)) throw new Error("Backup data is corrupted or unreadable.");
+  }
+
+  return { ...payload, settings: validBackupSettings(payload.settings) };
+}
+
+/**
+ * Decrypts an encrypted payload string and imports the data.
+ * Used by the file import. Returns record counts for the success message.
+ */
+export async function importFromEncryptedString(
+  encryptedText: string,
+  passphrase: string,
+  mode: ImportMode = "replace"
+): Promise<ImportResultCounts> {
+  const payload = await decryptBackup(encryptedText, passphrase);
 
   await importData(payload, mode);
 
   // Replace restores the backup's settings too (e.g. setting up a new
   // device); Merge keeps this device's own settings.
-  const settings = mode === "replace" ? validBackupSettings(payload.settings) : {};
+  const settings = mode === "replace" ? payload.settings ?? {} : {};
   const settingsRestored = Object.keys(settings).length > 0;
   if (settingsRestored) await saveConfig(settings);
 
