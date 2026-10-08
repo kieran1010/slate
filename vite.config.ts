@@ -37,7 +37,9 @@ export default defineConfig({
         theme_color: "#0F3557", // matches the existing Charted accent
         background_color: "#121212",
         display: "standalone", // looks like a native app, no browser chrome
-        orientation: "portrait",
+        // "any" follows the device rotation (portrait or landscape),
+        // so tablets can use the app sideways.
+        orientation: "any",
         start_url: "/",
         // Hypnos Medical app icon (brand moon on navy), from the
         // brand kit. The 512 doubles as the maskable icon: the moon
