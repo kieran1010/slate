@@ -41,9 +41,9 @@ export default defineConfig({
         // so tablets can use the app sideways.
         orientation: "any",
         start_url: "/",
-        // Hypnos Medical app icon (brand moon on navy), from the
-        // brand kit. The 512 doubles as the maskable icon: the moon
-        // sits inside the safe zone.
+        // Slate's own app icon (clipboard over a faint moon, on teal),
+        // from the brand kit's product icons. The 512 doubles as the
+        // maskable icon: the symbol sits inside the safe zone.
         icons: [
           { src: "icon-192.png", sizes: "192x192", type: "image/png", purpose: "any" },
           { src: "icon-512.png", sizes: "512x512", type: "image/png", purpose: "any" },
