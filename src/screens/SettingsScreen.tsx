@@ -75,6 +75,66 @@ interface FormState {
   encryptionPassphrase: string;
 }
 
+const FORM_FIELDS = [
+  "clinicianName",
+  "clinicianRole",
+  "defaultFollowUpHours",
+  "notificationLeadMins",
+  "aiEnabled",
+  "anthropicApiKey",
+  "encryptionPassphrase",
+] as const satisfies readonly (keyof FormState)[];
+
+function formFromConfig(c: FormState): FormState {
+  const out = {} as Record<keyof FormState, unknown>;
+  for (const f of FORM_FIELDS) out[f] = c[f];
+  return out as unknown as FormState;
+}
+
+// How long typing must pause before a text or number field auto-saves.
+// Switches save straight away; the passphrase only when its box is left.
+const AUTOSAVE_DELAY_MS = 1000;
+
+/**
+ * The value a form field saves as, or undefined if it shouldn't be saved
+ * yet: an emptied number box (mid-edit) keeps the stored value.
+ */
+function savedValue<K extends keyof FormState>(form: FormState, k: K): FormState[K] | undefined {
+  const v = form[k];
+  switch (k) {
+    case "clinicianName":
+    case "clinicianRole":
+    case "anthropicApiKey":
+      return (v as string).trim() as FormState[K];
+    case "defaultFollowUpHours":
+    case "notificationLeadMins": {
+      const n = Number(v);
+      if (!Number.isFinite(n) || n === 0) return undefined;
+      return Math.max(k === "defaultFollowUpHours" ? 1 : 0, n) as FormState[K];
+    }
+    default:
+      return v;
+  }
+}
+
+/**
+ * The fields the user has edited (form differs from `base`, the stored
+ * values it was last brought up to date with) that would change what's
+ * stored. Only edited fields: synced settings are stamped as edited when
+ * saved, so re-saving an untouched field from a stale form would make an
+ * older value win the next sync.
+ */
+function editedChanges(form: FormState, base: FormState, includePassphrase: boolean): Partial<FormState> {
+  const changes: Record<string, unknown> = {};
+  for (const k of FORM_FIELDS) {
+    if (k === "encryptionPassphrase" && !includePassphrase) continue;
+    if (form[k] === base[k]) continue;
+    const v = savedValue(form, k);
+    if (v !== undefined && v !== base[k]) changes[k] = v;
+  }
+  return changes as Partial<FormState>;
+}
+
 interface SettingsScreenProps {
   // Closes the Settings panel (App balances the browser-history entry).
   onClose?: () => void;
@@ -139,21 +199,19 @@ export function SettingsScreen({ onClose, onDataErased }: SettingsScreenProps) {
   const existingConfig = useLiveQuery(() => getConfig(), []);
 
   // ── Form state ────────────────────────────────────────────
-  const [form, setForm] = useState<FormState>({
-    clinicianName: DEFAULT_APP_CONFIG.clinicianName,
-    clinicianRole: DEFAULT_APP_CONFIG.clinicianRole,
-    defaultFollowUpHours: DEFAULT_APP_CONFIG.defaultFollowUpHours,
-    notificationLeadMins: DEFAULT_APP_CONFIG.notificationLeadMins,
-    aiEnabled: DEFAULT_APP_CONFIG.aiEnabled,
-    anthropicApiKey: DEFAULT_APP_CONFIG.anthropicApiKey,
-    encryptionPassphrase: DEFAULT_APP_CONFIG.encryptionPassphrase,
-  });
-  const [initialized, setInitialized] = useState(false);
+  const [form, setForm] = useState<FormState>(() => formFromConfig(DEFAULT_APP_CONFIG));
+  // The stored values the form was last brought up to date with. A field
+  // whose form value differs from this is one the user has edited.
+  const baselineRef = useRef<FormState | null>(null);
   const [showAiWarning, setShowAiWarning] = useState(false);
   const [keyVisible, setKeyVisible] = useState(false);
   const [passphraseVisible, setPassphraseVisible] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [toastVisible, setToastVisible] = useState(false);
+  const [toast, setToast] = useState<{ visible: boolean; message: string }>({ visible: false, message: "" });
+  // Latest form, for saves that run from timers and on close.
+  const formRef = useRef(form);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Set while this device is being erased, so nothing is saved into it.
+  const erasingRef = useRef(false);
 
   // ── Erase-device state ─────────────────────────────────────
   const [showEraseConfirm, setShowEraseConfirm] = useState(false);
@@ -182,20 +240,26 @@ export function SettingsScreen({ onClose, onDataErased }: SettingsScreenProps) {
   // ── CSV export state ───────────────────────────────────────
   const [exportingCsv, setExportingCsv] = useState(false);
 
-  // ── Populate form from Dexie ──────────────────────────────
+  // ── Populate form from Dexie, and keep it current ─────────
+  // Settings can change underneath the open form: a Drive sync or a
+  // backup import brings them down (e.g. the AI key on a new device).
+  // Those new values replace any field the user hasn't edited, so the
+  // form shows what is actually stored — and auto-save (which writes only
+  // edited fields) can't put the old values back over them.
   useEffect(() => {
-    if (!existingConfig || initialized) return;
-    setForm({
-      clinicianName: existingConfig.clinicianName,
-      clinicianRole: existingConfig.clinicianRole,
-      defaultFollowUpHours: existingConfig.defaultFollowUpHours,
-      notificationLeadMins: existingConfig.notificationLeadMins,
-      aiEnabled: existingConfig.aiEnabled,
-      anthropicApiKey: existingConfig.anthropicApiKey,
-      encryptionPassphrase: existingConfig.encryptionPassphrase,
+    if (!existingConfig) return;
+    const stored = formFromConfig(existingConfig);
+    const base = baselineRef.current;
+    baselineRef.current = stored;
+    if (!base) { setForm(stored); return; }
+    setForm((f) => {
+      let next = f;
+      for (const k of FORM_FIELDS) {
+        if (stored[k] !== base[k] && f[k] === base[k]) next = { ...next, [k]: stored[k] };
+      }
+      return next;
     });
-    setInitialized(true);
-  }, [existingConfig, initialized]);
+  }, [existingConfig]);
 
   const driveEnabled = existingConfig?.driveBackupEnabled ?? false;
   const autoOn = existingConfig?.driveAutoSyncEnabled ?? true;
@@ -214,35 +278,48 @@ export function SettingsScreen({ onClose, onDataErased }: SettingsScreenProps) {
     }, []
   );
 
-  // ── Save ──────────────────────────────────────────────────
-  async function handleSave() {
-    setSaving(true);
+  // ── Auto-save ─────────────────────────────────────────────
+  // Edits save themselves: switches at once, text and numbers after a
+  // short pause in typing, the passphrase when its box is left (a half-
+  // typed one would stop sync opening the Drive copy). Anything waiting
+  // is saved when Settings closes or the app goes to the background.
+  const flushSave = useCallback(async (includePassphrase: boolean) => {
+    const base = baselineRef.current;
+    if (!base || erasingRef.current) return;
+    const changes = editedChanges(formRef.current, base, includePassphrase);
+    if (Object.keys(changes).length === 0) return;
+    let message = "Saved";
     try {
-      const config = {
-        clinicianName: form.clinicianName.trim(),
-        clinicianRole: form.clinicianRole.trim(),
-        defaultFollowUpHours: Math.max(1, Number(form.defaultFollowUpHours) || 24),
-        notificationLeadMins: Math.max(0, Number(form.notificationLeadMins) || 60),
-        aiEnabled: form.aiEnabled,
-        anthropicApiKey: form.anthropicApiKey.trim(),
-        encryptionPassphrase: form.encryptionPassphrase,
-      };
-      await saveConfig(config);
-      setToastVisible(true);
-      // Auto-close shortly after a successful save: the "Settings saved"
-      // toast flashes, then the panel dismisses. onClose (App.closeSettings)
-      // also balances the browser-history entry pushed when Settings opened.
-      setTimeout(() => {
-        setToastVisible(false);
-        onClose?.();
-      }, 900);
+      await saveConfig(changes);
     } catch (err) {
       console.error("Settings save failed:", err);
-      alert("Save failed — please try again.");
-    } finally {
-      setSaving(false);
+      message = "Couldn't save settings. Please try again.";
     }
-  }
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    setToast({ visible: true, message });
+    toastTimerRef.current = setTimeout(() => setToast((t) => ({ ...t, visible: false })), 1500);
+  }, []);
+
+  useEffect(() => {
+    formRef.current = form;
+    const base = baselineRef.current;
+    if (!base) return;
+    const pending = editedChanges(form, base, false);
+    if (Object.keys(pending).length === 0) return;
+    const switchChanged = Object.values(pending).some((v) => typeof v === "boolean");
+    const timer = setTimeout(() => void flushSave(false), switchChanged ? 0 : AUTOSAVE_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [form, flushSave]);
+
+  useEffect(() => {
+    const onHide = () => { if (document.visibilityState === "hidden") void flushSave(true); };
+    document.addEventListener("visibilitychange", onHide);
+    return () => {
+      document.removeEventListener("visibilitychange", onHide);
+      // Settings is closing (✕, the back key, or after an erase).
+      void flushSave(true);
+    };
+  }, [flushSave]);
 
   // ── Erase this device ─────────────────────────────────────
   // Wipes all patient data and settings (including the backup
@@ -270,18 +347,20 @@ export function SettingsScreen({ onClose, onDataErased }: SettingsScreenProps) {
       }
     }
     try {
+      erasingRef.current = true;
       await revokeDriveToken();
       await clearAllLocalData();
       onDataErased?.();
     } catch (err) {
       console.error(err);
+      erasingRef.current = false;
       alert("Erase failed. Please try again.");
       setErasing(false);
     }
   }
 
   // ── Google Drive sync ──────────────────────────────────────
-  // The passphrase box is part of the form (saved by Save), but syncing
+  // The passphrase box saves when it's left, but syncing
   // and file backups use it straight away, so they save it first.
   async function savePassphraseIfChanged() {
     if (existingConfig && form.encryptionPassphrase !== existingConfig.encryptionPassphrase) {
@@ -432,9 +511,6 @@ export function SettingsScreen({ onClose, onDataErased }: SettingsScreenProps) {
           </button>
         )}
         <h1 className="screen-header-title" style={{ textAlign: "left", flex: 1 }}>Settings</h1>
-        <button className="btn btn-primary" onClick={handleSave} disabled={saving} aria-busy={saving} style={{ minWidth: 60 }}>
-          {saving ? "Saving…" : "Save"}
-        </button>
       </div>
 
       <div className="form-body">
@@ -541,6 +617,7 @@ export function SettingsScreen({ onClose, onDataErased }: SettingsScreenProps) {
                 placeholder="Choose a strong passphrase"
                 value={form.encryptionPassphrase}
                 onChange={(e) => set("encryptionPassphrase", e.target.value)}
+                onBlur={() => void flushSave(true)}
                 autoComplete="off" autoCorrect="off" spellCheck={false} />
               <button className="btn-icon-sm" type="button" onClick={() => setPassphraseVisible((v) => !v)}
                 aria-label={passphraseVisible ? "Hide passphrase" : "Show passphrase"}>
@@ -791,9 +868,9 @@ export function SettingsScreen({ onClose, onDataErased }: SettingsScreenProps) {
 
       </div>
 
-      {/* Saved toast */}
-      <div className={`save-toast${toastVisible ? " visible" : ""}`} aria-live="polite" aria-atomic="true">
-        Settings saved
+      {/* Auto-save feedback */}
+      <div className={`save-toast${toast.visible ? " visible" : ""}`} aria-live="polite" aria-atomic="true">
+        {toast.message}
       </div>
     </div>
   );
