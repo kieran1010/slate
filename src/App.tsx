@@ -235,8 +235,8 @@ export default function App() {
     window.history.pushState({ slateNav: true, settings: true }, "");
   }, []);
 
-  // Closing Settings from within the app (the ✕ button, the auto-close
-  // after Save, or after sign-out) pops the entry we pushed on open so
+  // Closing Settings from within the app (the ✕ button, or after an
+  // erase) pops the entry we pushed on open so
   // browser history stays balanced. suppressNextPopState stops that
   // synthetic popstate from being treated as a back navigation.
   const closeSettings = useCallback(() => {
