@@ -75,6 +75,22 @@ interface FormState {
   encryptionPassphrase: string;
 }
 
+const FORM_FIELDS = [
+  "clinicianName",
+  "clinicianRole",
+  "defaultFollowUpHours",
+  "notificationLeadMins",
+  "aiEnabled",
+  "anthropicApiKey",
+  "encryptionPassphrase",
+] as const satisfies readonly (keyof FormState)[];
+
+function formFromConfig(c: FormState): FormState {
+  const out = {} as Record<keyof FormState, unknown>;
+  for (const f of FORM_FIELDS) out[f] = c[f];
+  return out as unknown as FormState;
+}
+
 interface SettingsScreenProps {
   // Closes the Settings panel (App balances the browser-history entry).
   onClose?: () => void;
@@ -139,16 +155,10 @@ export function SettingsScreen({ onClose, onDataErased }: SettingsScreenProps) {
   const existingConfig = useLiveQuery(() => getConfig(), []);
 
   // ── Form state ────────────────────────────────────────────
-  const [form, setForm] = useState<FormState>({
-    clinicianName: DEFAULT_APP_CONFIG.clinicianName,
-    clinicianRole: DEFAULT_APP_CONFIG.clinicianRole,
-    defaultFollowUpHours: DEFAULT_APP_CONFIG.defaultFollowUpHours,
-    notificationLeadMins: DEFAULT_APP_CONFIG.notificationLeadMins,
-    aiEnabled: DEFAULT_APP_CONFIG.aiEnabled,
-    anthropicApiKey: DEFAULT_APP_CONFIG.anthropicApiKey,
-    encryptionPassphrase: DEFAULT_APP_CONFIG.encryptionPassphrase,
-  });
-  const [initialized, setInitialized] = useState(false);
+  const [form, setForm] = useState<FormState>(() => formFromConfig(DEFAULT_APP_CONFIG));
+  // The stored values the form was last brought up to date with. A field
+  // whose form value differs from this is one the user has edited.
+  const baselineRef = useRef<FormState | null>(null);
   const [showAiWarning, setShowAiWarning] = useState(false);
   const [keyVisible, setKeyVisible] = useState(false);
   const [passphraseVisible, setPassphraseVisible] = useState(false);
@@ -182,20 +192,26 @@ export function SettingsScreen({ onClose, onDataErased }: SettingsScreenProps) {
   // ── CSV export state ───────────────────────────────────────
   const [exportingCsv, setExportingCsv] = useState(false);
 
-  // ── Populate form from Dexie ──────────────────────────────
+  // ── Populate form from Dexie, and keep it current ─────────
+  // Settings can change underneath the open form: a Drive sync or a
+  // backup import brings them down (e.g. the AI key on a new device).
+  // Those new values replace any field the user hasn't edited, so the
+  // form shows what is actually stored — and Save (which writes only
+  // edited fields) can't put the old values back over them.
   useEffect(() => {
-    if (!existingConfig || initialized) return;
-    setForm({
-      clinicianName: existingConfig.clinicianName,
-      clinicianRole: existingConfig.clinicianRole,
-      defaultFollowUpHours: existingConfig.defaultFollowUpHours,
-      notificationLeadMins: existingConfig.notificationLeadMins,
-      aiEnabled: existingConfig.aiEnabled,
-      anthropicApiKey: existingConfig.anthropicApiKey,
-      encryptionPassphrase: existingConfig.encryptionPassphrase,
+    if (!existingConfig) return;
+    const stored = formFromConfig(existingConfig);
+    const base = baselineRef.current;
+    baselineRef.current = stored;
+    if (!base) { setForm(stored); return; }
+    setForm((f) => {
+      let next = f;
+      for (const k of FORM_FIELDS) {
+        if (stored[k] !== base[k] && f[k] === base[k]) next = { ...next, [k]: stored[k] };
+      }
+      return next;
     });
-    setInitialized(true);
-  }, [existingConfig, initialized]);
+  }, [existingConfig]);
 
   const driveEnabled = existingConfig?.driveBackupEnabled ?? false;
   const autoOn = existingConfig?.driveAutoSyncEnabled ?? true;
@@ -218,7 +234,7 @@ export function SettingsScreen({ onClose, onDataErased }: SettingsScreenProps) {
   async function handleSave() {
     setSaving(true);
     try {
-      const config = {
+      const config: FormState = {
         clinicianName: form.clinicianName.trim(),
         clinicianRole: form.clinicianRole.trim(),
         defaultFollowUpHours: Math.max(1, Number(form.defaultFollowUpHours) || 24),
@@ -227,7 +243,15 @@ export function SettingsScreen({ onClose, onDataErased }: SettingsScreenProps) {
         anthropicApiKey: form.anthropicApiKey.trim(),
         encryptionPassphrase: form.encryptionPassphrase,
       };
-      await saveConfig(config);
+      // Only the fields the user edited. Synced settings are stamped as
+      // edited when saved, so re-saving an untouched field from a stale
+      // form would make an older value win the next sync.
+      const base = baselineRef.current;
+      const changes: Partial<FormState> = {};
+      for (const k of FORM_FIELDS) {
+        if (!base || form[k] !== base[k]) (changes as Record<string, unknown>)[k] = config[k];
+      }
+      await saveConfig(changes);
       setToastVisible(true);
       // Auto-close shortly after a successful save: the "Settings saved"
       // toast flashes, then the panel dismisses. onClose (App.closeSettings)
