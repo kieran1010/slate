@@ -515,92 +515,12 @@ export function SettingsScreen({ onClose, onDataErased }: SettingsScreenProps) {
 
       <div className="form-body">
 
-        {/* ── Profile ──────────────────────────────────── */}
-        <section className="form-section" aria-label="Profile">
-          <div className="form-section-title">Profile</div>
-          <div className="form-field">
-            <label className="form-label" htmlFor="s-name">Your name</label>
-            <input id="s-name" className="form-input" type="text" placeholder="e.g. Dr Aroha Ngata"
-              value={form.clinicianName} onChange={(e) => set("clinicianName", e.target.value)} autoCapitalize="words" />
-          </div>
-          <div className="form-field">
-            <label className="form-label" htmlFor="s-role">Role</label>
-            <input id="s-role" className="form-input" type="text" placeholder="e.g. Anaesthetist"
-              value={form.clinicianRole} onChange={(e) => set("clinicianRole", e.target.value)} autoCapitalize="words" />
-          </div>
-        </section>
-
-        {/* ── App defaults ─────────────────────────────── */}
-        <section className="form-section" aria-label="App defaults">
-          <div className="form-section-title">App defaults</div>
-          <div className="form-field">
-            <label className="form-label" htmlFor="s-fuHours">Default follow-up period (hours)</label>
-            <input id="s-fuHours" className="form-input" type="number" inputMode="numeric" min={1} max={168}
-              value={form.defaultFollowUpHours} onChange={(e) => set("defaultFollowUpHours", Number(e.target.value))} />
-            <span className="form-hint"></span>
-          </div>
-          <div className="form-field">
-            <label className="form-label" htmlFor="s-notif">Reminder lead time (minutes)</label>
-            <input id="s-notif" className="form-input" type="number" inputMode="numeric" min={0} max={1440}
-              value={form.notificationLeadMins} onChange={(e) => set("notificationLeadMins", Number(e.target.value))} />
-            <span className="form-hint"></span>
-          </div>
-        </section>
-
-        {/* ── AI features ──────────────────────────────── */}
-        <section className="form-section" aria-label="AI features">
-          <div className="form-section-title">AI features</div>
-          <div className="form-field">
-            <div className="toggle-row">
-              <span className="toggle-label">
-                Enable AI features
-                <span className="toggle-label-sub">Allows document import using the Anthropic API</span>
-              </span>
-              <button className="toggle-track" role="switch" aria-checked={form.aiEnabled}
-                aria-label="Enable AI features" onClick={handleAiToggle}>
-                <span className="toggle-thumb" />
-              </button>
-            </div>
-          </div>
-          {showAiWarning && (
-            <div className="ai-warning" role="alert" aria-live="polite">
-              <p className="ai-warning-title"><AlertTriangle size={16} aria-hidden /> Data confidentiality</p>
-              <p>Enabling AI features allows Slate to send clinical text to Anthropic's API for processing, including any patient information in the fields you import.</p>
-              <p>You are responsible for ensuring this complies with applicable privacy obligations in your jurisdiction, including the NZ Health Information Privacy Code.</p>
-              <p>AI features use <strong>your own Anthropic API key</strong>, stored on this device and included in your encrypted backups.</p>
-              <div className="ai-warning-actions">
-                <button className="btn btn-secondary" onClick={() => setShowAiWarning(false)}>Cancel</button>
-                <button className="btn btn-primary" onClick={() => { setShowAiWarning(false); set("aiEnabled", true); }}>
-                  <Check size={14} aria-hidden /> I understand
-                </button>
-              </div>
-            </div>
-          )}
-          {form.aiEnabled && (
-            <div className="form-field">
-              <label className="form-label" htmlFor="s-apikey">Anthropic API key</label>
-              <div className="apikey-row">
-                <input id="s-apikey" className="form-input" type={keyVisible ? "text" : "password"}
-                  placeholder="sk-ant-…" value={form.anthropicApiKey}
-                  onChange={(e) => set("anthropicApiKey", e.target.value)}
-                  autoComplete="off" autoCorrect="off" spellCheck={false}
-                  style={{ fontFamily: "monospace", letterSpacing: "0.04em" }} />
-                <button className="btn-icon-sm" type="button" onClick={() => setKeyVisible((v) => !v)}
-                  aria-label={keyVisible ? "Hide API key" : "Show API key"}>
-                  {keyVisible ? <EyeOff size={16} aria-hidden /> : <Eye size={16} aria-hidden />}
-                </button>
-              </div>
-              <span className="form-hint">Stored on this device and included in your encrypted backups. Never sent to Hypnos Medical.</span>
-            </div>
-          )}
-        </section>
-
         {/* ── Backup & sync ────────────────────────────── */}
         <section className="form-section" aria-label="Backup and sync">
           <div className="form-section-title">Backup &amp; sync</div>
 
           {hasLocalData === false && !driveEnabled && (
-            <div className="gdocs-notice" role="status" style={{ margin: "0 16px 0.75rem" }}>
+            <div className="gdocs-notice" role="status">
               <AlertTriangle size={14} aria-hidden />
               <span>
                 New device? Enter your passphrase below, then switch on Google Drive sync to bring
@@ -675,7 +595,7 @@ export function SettingsScreen({ onClose, onDataErased }: SettingsScreenProps) {
           )}
 
           {driveEnabled && !showDriveWarning && isDriveConfigured() && (
-            <div className="form-section-body" style={{ paddingTop: 0 }}>
+            <div className="form-section-body">
               <div className="toggle-row">
                 <span className="toggle-label">
                   Sync automatically
@@ -709,7 +629,7 @@ export function SettingsScreen({ onClose, onDataErased }: SettingsScreenProps) {
               )}
 
               {syncStatus.state === "wrong-passphrase" && (
-                <div className="ai-warning" role="alert" aria-live="polite" style={{ margin: "0.75rem 0 0" }}>
+                <div className="ai-warning" role="alert" aria-live="polite">
                   <p className="ai-warning-title"><AlertTriangle size={16} aria-hidden /> Passphrase doesn't match</p>
                   <p>
                     This device's passphrase can't open the copy in your Google Drive, so nothing has
@@ -741,9 +661,11 @@ export function SettingsScreen({ onClose, onDataErased }: SettingsScreenProps) {
           )}
 
           {!driveEnabled && driveResult && !showDriveWarning && (
-            <p className={driveResult.ok ? "data-import-ok" : "auth-error"} style={{ margin: "0 16px 0.5rem" }}>
-              {driveResult.message}
-            </p>
+            <div className="form-section-body">
+              <p className={driveResult.ok ? "data-import-ok" : "auth-error"} style={{ margin: 0 }}>
+                {driveResult.message}
+              </p>
+            </div>
           )}
 
           {/* Backup file */}
@@ -765,7 +687,7 @@ export function SettingsScreen({ onClose, onDataErased }: SettingsScreenProps) {
             </div>
 
             {importConfirm && (
-              <div className="ai-warning" role="alert" aria-live="polite" style={{ margin: "0.75rem 0 0" }}>
+              <div className="ai-warning" role="alert" aria-live="polite">
                 {importConfirm.hasLocalData ? (
                   <>
                     <p className="ai-warning-title"><AlertTriangle size={16} aria-hidden /> You already have patient data on this device</p>
@@ -803,6 +725,84 @@ export function SettingsScreen({ onClose, onDataErased }: SettingsScreenProps) {
                 {importResult.message}
               </p>
             )}
+          </div>
+        </section>
+
+        {/* ── AI features ──────────────────────────────── */}
+        <section className="form-section" aria-label="AI features">
+          <div className="form-section-title">AI features</div>
+          <div className="form-field">
+            <div className="toggle-row">
+              <span className="toggle-label">
+                Enable AI features
+                <span className="toggle-label-sub">Allows document import using the Anthropic API</span>
+              </span>
+              <button className="toggle-track" role="switch" aria-checked={form.aiEnabled}
+                aria-label="Enable AI features" onClick={handleAiToggle}>
+                <span className="toggle-thumb" />
+              </button>
+            </div>
+          </div>
+          {showAiWarning && (
+            <div className="ai-warning" role="alert" aria-live="polite">
+              <p className="ai-warning-title"><AlertTriangle size={16} aria-hidden /> Data confidentiality</p>
+              <p>Enabling AI features allows Slate to send clinical text to Anthropic's API for processing, including any patient information in the fields you import.</p>
+              <p>You are responsible for ensuring this complies with applicable privacy obligations in your jurisdiction, including the NZ Health Information Privacy Code.</p>
+              <p>AI features use <strong>your own Anthropic API key</strong>, stored on this device and included in your encrypted backups.</p>
+              <div className="ai-warning-actions">
+                <button className="btn btn-secondary" onClick={() => setShowAiWarning(false)}>Cancel</button>
+                <button className="btn btn-primary" onClick={() => { setShowAiWarning(false); set("aiEnabled", true); }}>
+                  <Check size={14} aria-hidden /> I understand
+                </button>
+              </div>
+            </div>
+          )}
+          {form.aiEnabled && (
+            <div className="form-field">
+              <label className="form-label" htmlFor="s-apikey">Anthropic API key</label>
+              <div className="apikey-row">
+                <input id="s-apikey" className="form-input" type={keyVisible ? "text" : "password"}
+                  placeholder="sk-ant-…" value={form.anthropicApiKey}
+                  onChange={(e) => set("anthropicApiKey", e.target.value)}
+                  autoComplete="off" autoCorrect="off" spellCheck={false}
+                  style={{ fontFamily: "monospace", letterSpacing: "0.04em" }} />
+                <button className="btn-icon-sm" type="button" onClick={() => setKeyVisible((v) => !v)}
+                  aria-label={keyVisible ? "Hide API key" : "Show API key"}>
+                  {keyVisible ? <EyeOff size={16} aria-hidden /> : <Eye size={16} aria-hidden />}
+                </button>
+              </div>
+              <span className="form-hint">Stored on this device and included in your encrypted backups. Never sent to Hypnos Medical.</span>
+            </div>
+          )}
+        </section>
+
+        {/* ── Profile ──────────────────────────────────── */}
+        <section className="form-section" aria-label="Profile">
+          <div className="form-section-title">Profile</div>
+          <div className="form-field">
+            <label className="form-label" htmlFor="s-name">Your name</label>
+            <input id="s-name" className="form-input" type="text" placeholder="e.g. Dr Aroha Ngata"
+              value={form.clinicianName} onChange={(e) => set("clinicianName", e.target.value)} autoCapitalize="words" />
+          </div>
+          <div className="form-field">
+            <label className="form-label" htmlFor="s-role">Role</label>
+            <input id="s-role" className="form-input" type="text" placeholder="e.g. Anaesthetist"
+              value={form.clinicianRole} onChange={(e) => set("clinicianRole", e.target.value)} autoCapitalize="words" />
+          </div>
+        </section>
+
+        {/* ── Defaults ─────────────────────────────── */}
+        <section className="form-section" aria-label="Defaults">
+          <div className="form-section-title">Defaults</div>
+          <div className="form-field">
+            <label className="form-label" htmlFor="s-fuHours">Default follow-up period (hours)</label>
+            <input id="s-fuHours" className="form-input" type="number" inputMode="numeric" min={1} max={168}
+              value={form.defaultFollowUpHours} onChange={(e) => set("defaultFollowUpHours", Number(e.target.value))} />
+          </div>
+          <div className="form-field">
+            <label className="form-label" htmlFor="s-notif">Reminder lead time (minutes)</label>
+            <input id="s-notif" className="form-input" type="number" inputMode="numeric" min={0} max={1440}
+              value={form.notificationLeadMins} onChange={(e) => set("notificationLeadMins", Number(e.target.value))} />
           </div>
         </section>
 

@@ -59,6 +59,7 @@ import {
 } from "./syncMerge";
 import { getActiveProfileId } from "./profiles";
 import { nowIso } from "./dates";
+import { capitalCase } from "../utils/format";
 
 // ============================================================
 // INPUT TYPES
@@ -197,7 +198,14 @@ export async function listPatients(): Promise<Patient[]> {
 }
 
 // Create or update the identity record (keyed on NHI per profile).
-export async function upsertPatient(patient: Patient): Promise<void> {
+// Names are forced to Capital Case here so every route in (forms,
+// AI import) stores them the same way.
+export async function upsertPatient(input: Patient): Promise<void> {
+  const patient: Patient = {
+    ...input,
+    surname: capitalCase(input.surname.trim()),
+    givenName: capitalCase(input.givenName.trim()),
+  };
   const pid = await requireActiveProfileId();
   await db.transaction("rw", db.patients, async () => {
     const existing = await db.patients.get([pid, patient.nhi]);

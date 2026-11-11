@@ -54,6 +54,7 @@ import {
 import type { Urgency, RecordStatus } from "../data/models";
 import { AutoTextarea } from "../components/AutoTextarea";
 import type { NavigateFn } from "../types/nav";
+import { capitalCase } from "../utils/format";
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -376,7 +377,7 @@ export function AcuteDetailScreen({
           {patientKnown && identityReadOnly && (
             <div className="patient-info-strip">
               <span className="patient-info-strip-name">
-                {form.surname}, {form.givenName}
+                {capitalCase(form.surname)}, {capitalCase(form.givenName)}
               </span>
               {form.dob && (
                 <span className="patient-info-strip-sub">
@@ -401,6 +402,7 @@ export function AcuteDetailScreen({
                   placeholder="Patient surname"
                   value={form.surname}
                   onChange={(e) => set("surname", e.target.value)}
+                  onBlur={() => set("surname", capitalCase(form.surname))}
                   autoCapitalize="words"
                 />
               </div>
@@ -415,6 +417,7 @@ export function AcuteDetailScreen({
                   placeholder="Given name"
                   value={form.givenName}
                   onChange={(e) => set("givenName", e.target.value)}
+                  onBlur={() => set("givenName", capitalCase(form.givenName))}
                   autoCapitalize="words"
                 />
               </div>

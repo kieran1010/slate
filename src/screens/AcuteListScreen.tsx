@@ -10,6 +10,7 @@ import { useBulkSelect } from "../hooks/useBulkSelect";
 import { BulkSelectBar } from "../components/BulkSelectBar";
 import type { Urgency, RecordStatus } from "../data/models";
 import type { NavigateFn } from "../types/nav";
+import { capitalCase } from "../utils/format";
 
 interface AcuteListScreenProps { navigate: NavigateFn; }
 
@@ -121,7 +122,7 @@ export function AcuteListScreen({ navigate }: AcuteListScreenProps) {
 
       <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
         {filtered!.map(({ rec, patient }) => {
-          const name = patient ? `${patient.surname}, ${patient.givenName}` : rec.nhi;
+          const name = patient ? `${capitalCase(patient.surname)}, ${capitalCase(patient.givenName)}` : rec.nhi;
           return (
             <li key={rec.id}>
               <div className={`patient-card${bulk.isSelected(rec.id!) ? " patient-card-selected" : ""}`} role="button" tabIndex={0}
