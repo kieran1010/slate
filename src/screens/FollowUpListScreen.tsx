@@ -8,7 +8,7 @@ import { archiveRecords, listActiveFollowUp, listPatients } from "../data/reposi
 import { useConfig } from "../hooks/useConfig";
 import { useBulkSelect } from "../hooks/useBulkSelect";
 import { BulkSelectBar } from "../components/BulkSelectBar";
-import { formatDateTime } from "../utils/format";
+import { formatDateTime, capitalCase } from "../utils/format";
 import type { RecordStatus } from "../data/models";
 import type { NavigateFn } from "../types/nav";
 
@@ -119,7 +119,7 @@ export function FollowUpListScreen({ navigate }: FollowUpListScreenProps) {
 
       <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
         {filtered!.map(({ rec, patient }) => {
-          const name = patient ? `${patient.surname}, ${patient.givenName}` : rec.nhi;
+          const name = patient ? `${capitalCase(patient.surname)}, ${capitalCase(patient.givenName)}` : rec.nhi;
           return (
             <li key={rec.id}>
               <div className={`patient-card${bulk.isSelected(rec.id!) ? " patient-card-selected" : ""}`} role="button" tabIndex={0}

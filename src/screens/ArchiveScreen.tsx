@@ -5,7 +5,7 @@
 // modules. Two modes:
 //
 //   BROWSE  — no search text; shows all archived records,
-//             most-recently-archived first.
+//             most-recently-archived first by default.
 //
 //   SEARCH  — free text across every field of the archived
 //             records (NHI, name, DOB, procedure, notes, location,
@@ -13,6 +13,13 @@
 //             once — see utils/archiveSearch.ts. Searching an NHI
 //             still shows which modules that patient has records
 //             in, so the user can restore the one they want.
+//
+// FILTER & SORT: a row of chips limits the list to one record type
+// (Pre-assess / Acute / Follow-up), and a sort menu orders it by
+// archive date, date added, date of surgery, name or NHI, with a
+// button to flip the direction. Both apply on top of any search.
+// Records with no value for the chosen date (e.g. Acute records have
+// no date of surgery) always go to the end, whichever direction.
 //
 // RESTORE: tapping "Restore" on a card un-archives that record
 // (flips archived = 0) via restoreRecord(). The card disappears
@@ -25,15 +32,16 @@
 
 import { useState, useMemo } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
-import { Search, X, Archive } from "lucide-react";
+import { Search, X, Archive, ArrowDown, ArrowUp } from "lucide-react";
 import {
   listArchived,
   restoreRecord,
   listPatients,
 } from "../data/repository";
-import { formatDateTime } from "../utils/format";
+import { formatDateTime, formatDate, capitalCase } from "../utils/format";
 import { matchesArchiveSearch } from "../utils/archiveSearch";
 import type { ArchivedItem } from "../data/repository";
+import type { Patient } from "../data/models";
 
 // The single most useful clinical field per module — shown as the
 // italic teal summary line on each card.
@@ -60,12 +68,75 @@ const MODULE_BADGE_CLS: Record<ArchivedItem["module"], string> = {
   FOLLOW_UP: "badge-mod-follow-up",
 };
 
+// ── Filter & sort ─────────────────────────────────────────────
+
+type ModuleFilter = "ALL" | ArchivedItem["module"];
+
+const FILTERS: { value: ModuleFilter; label: string }[] = [
+  { value: "ALL", label: "All" },
+  { value: "PRE_ASSESSMENT", label: "Pre-assess" },
+  { value: "ACUTE", label: "Acute" },
+  { value: "FOLLOW_UP", label: "Follow-up" },
+];
+
+type SortKey = "archived" | "created" | "surgery" | "name" | "nhi";
+
+// Each key's natural direction: newest first for dates, A–Z for text.
+const SORTS: { value: SortKey; label: string; defaultDesc: boolean }[] = [
+  { value: "archived", label: "Archive date", defaultDesc: true },
+  { value: "created", label: "Date added", defaultDesc: true },
+  { value: "surgery", label: "Date of surgery", defaultDesc: true },
+  { value: "name", label: "Name", defaultDesc: false },
+  { value: "nhi", label: "NHI", defaultDesc: false },
+];
+
+interface Row {
+  item: ArchivedItem;
+  patient: Patient | undefined;
+}
+
+function surgeryDate(item: ArchivedItem): string {
+  return item.module === "PRE_ASSESSMENT" ? item.record.dateOfSurgery : "";
+}
+
+function nameKey({ patient }: Row): string {
+  return patient
+    ? `${patient.surname}\u0000${patient.givenName}`.toLocaleLowerCase()
+    : "";
+}
+
+function sortValue(row: Row, key: SortKey): string {
+  switch (key) {
+    case "archived": return row.item.record.archivedAt || "";
+    case "created":  return row.item.record.createdAt || "";
+    case "surgery":  return surgeryDate(row.item);
+    case "name":     return nameKey(row);
+    case "nhi":      return row.item.record.nhi.toUpperCase();
+  }
+}
+
+function sortRows(rows: Row[], key: SortKey, desc: boolean): Row[] {
+  return [...rows].sort((a, b) => {
+    const va = sortValue(a, key);
+    const vb = sortValue(b, key);
+    // Blanks last regardless of direction.
+    if (!va !== !vb) return va ? -1 : 1;
+    const c = va.localeCompare(vb);
+    if (c !== 0) return desc ? -c : c;
+    // Ties: most recently archived first.
+    return (b.item.record.archivedAt || "").localeCompare(a.item.record.archivedAt || "");
+  });
+}
+
 // ── Component ─────────────────────────────────────────────────
 
 // ArchiveScreen takes no props — it is a top-level tab accessed
 // via the bottom nav, so there is no "back" destination.
 export function ArchiveScreen() {
   const [search, setSearch] = useState("");
+  const [moduleFilter, setModuleFilter] = useState<ModuleFilter>("ALL");
+  const [sortKey, setSortKey] = useState<SortKey>("archived");
+  const [sortDesc, setSortDesc] = useState(true);
 
   // All archived records, live. Search filters this in memory — archive
   // volumes are small, and it lets the search look at every field.
@@ -78,10 +149,20 @@ export function ArchiveScreen() {
     }));
   }, []);
 
-  const rows = useMemo(
-    () => all?.filter(({ item, patient }) => matchesArchiveSearch(item, patient, search)),
-    [all, search]
-  );
+  const rows = useMemo(() => {
+    if (!all) return undefined;
+    const filtered = all.filter(
+      ({ item, patient }) =>
+        (moduleFilter === "ALL" || item.module === moduleFilter) &&
+        matchesArchiveSearch(item, patient, search)
+    );
+    return sortRows(filtered, sortKey, sortDesc);
+  }, [all, search, moduleFilter, sortKey, sortDesc]);
+
+  function changeSort(key: SortKey) {
+    setSortKey(key);
+    setSortDesc(SORTS.find((o) => o.value === key)!.defaultDesc);
+  }
 
   // ── Restore ────────────────────────────────────────────────
   async function handleRestore(item: ArchivedItem) {
@@ -102,6 +183,11 @@ export function ArchiveScreen() {
 
   // ── Render ─────────────────────────────────────────────────
   const isSearching = search.trim().length > 0;
+  const isFiltered = moduleFilter !== "ALL";
+  const isDateSort = sortKey === "archived" || sortKey === "created" || sortKey === "surgery";
+  const dirLabel = isDateSort
+    ? (sortDesc ? "Newest first" : "Oldest first")
+    : (sortDesc ? "Z to A" : "A to Z");
   const isLoading = rows === undefined;
   const isEmpty = !isLoading && rows.length === 0;
 
@@ -138,13 +224,52 @@ export function ArchiveScreen() {
         </div>
       </div>
 
-      {/* ── Section label ──────────────────────────────────── */}
-      <div style={{ padding: "0 16px 10px" }}>
-        <span className="eyebrow">
+      {/* ── Type filter ────────────────────────────────── */}
+      <div className="archive-filters" role="group" aria-label="Filter by record type">
+        {FILTERS.map((f) => (
+          <button
+            key={f.value}
+            type="button"
+            className={`filter-chip${moduleFilter === f.value ? " active" : ""}`}
+            aria-pressed={moduleFilter === f.value}
+            onClick={() => setModuleFilter(f.value)}
+          >
+            {f.label}
+          </button>
+        ))}
+      </div>
+
+      {/* ── Section label + sort ───────────────────────────── */}
+      <div className="archive-toolbar">
+        <span className="eyebrow archive-toolbar-label">
           {isSearching
             ? `Results for “${search.trim()}”`
-            : "All archived records"}
+            : isFiltered
+              ? `Archived ${FILTERS.find((f) => f.value === moduleFilter)!.label.toLowerCase()} records`
+              : "All archived records"}
         </span>
+        <label className="archive-sort">
+          <span className="visually-hidden">Sort by</span>
+          <select
+            className="archive-sort-select"
+            value={sortKey}
+            onChange={(e) => changeSort(e.target.value as SortKey)}
+            aria-label="Sort by"
+          >
+            {SORTS.map((o) => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+          </select>
+        </label>
+        <button
+          type="button"
+          className="archive-sort-dir"
+          onClick={() => setSortDesc((d) => !d)}
+          aria-label={`Sort direction: ${dirLabel}. Tap to reverse.`}
+          title={dirLabel}
+        >
+          {sortDesc ? <ArrowDown size={15} aria-hidden /> : <ArrowUp size={15} aria-hidden />}
+        </button>
       </div>
 
       {/* ── Loading ────────────────────────────────────────── */}
@@ -157,12 +282,14 @@ export function ArchiveScreen() {
         <div className="empty-state">
           <Archive size={36} color="var(--dim)" aria-hidden />
           <p className="empty-state-title">
-            {isSearching ? "No matching archived records" : "Archive is empty"}
+            {isSearching || isFiltered ? "No matching archived records" : "Archive is empty"}
           </p>
           <p>
             {isSearching
               ? "Try different words, or clear the search to browse all archived records."
-              : "Records appear here after they are archived from the Acute, Pre-assessment, or Follow-up screens."}
+              : isFiltered
+                ? "There are no archived records of this type. Choose All to see every archived record."
+                : "Records appear here after they are archived from the Acute, Pre-assessment, or Follow-up screens."}
           </p>
         </div>
       )}
@@ -171,12 +298,19 @@ export function ArchiveScreen() {
       <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
         {rows?.map(({ item, patient }, idx) => {
           const name = patient
-            ? `${patient.surname}, ${patient.givenName}`
+            ? `${capitalCase(patient.surname)}, ${capitalCase(patient.givenName)}`
             : item.record.nhi;
           const summary = getSummary(item);
           const archivedAt = item.record.archivedAt
             ? formatDateTime(item.record.archivedAt)
             : null;
+          // Show the date being sorted on, when it isn't the archive date.
+          const extra =
+            sortKey === "created" && item.record.createdAt
+              ? `Added ${formatDate(item.record.createdAt)}`
+              : sortKey === "surgery" && surgeryDate(item)
+                ? `Surgery ${formatDateTime(surgeryDate(item))}`
+                : null;
 
           return (
             <li key={`${item.module}-${item.record.id ?? idx}`}>
@@ -207,9 +341,9 @@ export function ArchiveScreen() {
                   <div className="archive-card-summary">{summary}</div>
                 )}
 
-                {archivedAt && (
+                {(archivedAt || extra) && (
                   <div className="archive-card-meta">
-                    Archived {archivedAt}
+                    {[archivedAt && `Archived ${archivedAt}`, extra].filter(Boolean).join(" · ")}
                   </div>
                 )}
               </div>

@@ -46,6 +46,7 @@
 //   strings and never reinterprets them, except calculateAge()
 //   at the bottom of this file.
 // ============================================================
+import { capitalCase } from "../utils/format";
 
 // ============================================================
 // ENUMS — fixed sets of allowed values
@@ -143,7 +144,7 @@ export interface Patient {
 
 // Full name formatted as "Surname, Given".
 export function displayName(p: Patient): string {
-  return `${p.surname}, ${p.givenName}`;
+  return `${capitalCase(p.surname)}, ${capitalCase(p.givenName)}`;
 }
 
 // Short identifier for list views.

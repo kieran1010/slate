@@ -57,6 +57,7 @@ import { dateAddHours } from "../data/dates";
 import { AutoTextarea } from "../components/AutoTextarea";
 import { DateTimeField } from "../components/DateTimeField";
 import type { NavigateFn } from "../types/nav";
+import { capitalCase } from "../utils/format";
 
 interface FollowUpDetailScreenProps {
   id: number | "new";
@@ -378,7 +379,7 @@ export function FollowUpDetailScreen({
           {identityReadOnly && (form.surname || form.givenName) && (
             <div className="patient-info-strip">
               <span className="patient-info-strip-name">
-                {form.surname}, {form.givenName}
+                {capitalCase(form.surname)}, {capitalCase(form.givenName)}
               </span>
               {form.dob && (
                 <span className="patient-info-strip-sub">
@@ -396,6 +397,7 @@ export function FollowUpDetailScreen({
                 <input id="fu-surname" className="form-input" type="text"
                   placeholder="Patient surname" value={form.surname}
                   onChange={(e) => set("surname", e.target.value)}
+                  onBlur={() => set("surname", capitalCase(form.surname))}
                   autoCapitalize="words" />
               </div>
               <div className="form-field">
@@ -403,6 +405,7 @@ export function FollowUpDetailScreen({
                 <input id="fu-given" className="form-input" type="text"
                   placeholder="Given name" value={form.givenName}
                   onChange={(e) => set("givenName", e.target.value)}
+                  onBlur={() => set("givenName", capitalCase(form.givenName))}
                   autoCapitalize="words" />
               </div>
               <div className="form-field">

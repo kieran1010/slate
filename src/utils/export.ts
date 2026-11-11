@@ -22,7 +22,7 @@
 // ============================================================
 
 import { calculateAge } from "../data/models";
-import { formatDateDMY, formatDateTimeDMY } from "./format";
+import { formatDateDMY, formatDateTimeDMY, capitalCase } from "./format";
 
 // The minimal shapes this formatter needs — only the fields it
 // actually reads, so it isn't coupled to the full stored types.
@@ -92,7 +92,7 @@ export function formatPreAssess(
     ? `DOB: ${dobStr}${age ? ` (${age})` : ""}`
     : "";
   const identityParts = [
-    `${patient.surname}, ${patient.givenName}`.trim().replace(/^,\s*/, ""),
+    `${capitalCase(patient.surname)}, ${capitalCase(patient.givenName)}`.trim().replace(/^,\s*/, ""),
     patient.nhi ? `NHI: ${patient.nhi}` : "",
     dobPart,
   ].filter(Boolean);

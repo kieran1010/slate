@@ -49,3 +49,16 @@ export function formatDateTimeDMY(iso: string): string {
   const date = formatDateDMY(datePart);
   return timePart ? `${date}, ${timePart}` : date;
 }
+
+// Patient names are shown and stored in Capital Case: the first letter
+// of each word is upper case and the rest lower case. Hyphens and
+// apostrophes start a new word ("SMITH-JONES" → "Smith-Jones",
+// "o'brien" → "O'Brien"), and a leading "Mc" capitalises the next
+// letter ("MCDONALD" → "McDonald"). Spacing is left as typed so this
+// can run while someone is still typing; trim separately when saving.
+export function capitalCase(name: string): string {
+  return name
+    .toLocaleLowerCase()
+    .replace(/(^|[\s\-'’])(\p{L})/gu, (_m, sep: string, ch: string) => sep + ch.toLocaleUpperCase())
+    .replace(/(^|[\s\-'’])Mc(\p{L})/gu, (_m, sep: string, ch: string) => sep + "Mc" + ch.toLocaleUpperCase());
+}

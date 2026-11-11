@@ -9,7 +9,7 @@ import { useConfig } from "../hooks/useConfig";
 import { useBulkSelect } from "../hooks/useBulkSelect";
 import { BulkSelectBar } from "../components/BulkSelectBar";
 import { calculateAge } from "../data/models";
-import { formatDateTime } from "../utils/format";
+import { formatDateTime, capitalCase } from "../utils/format";
 import type { RecordStatus } from "../data/models";
 import type { NavigateFn } from "../types/nav";
 
@@ -116,7 +116,7 @@ export function PreAssessListScreen({ navigate }: PreAssessListScreenProps) {
 
       <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
         {filtered!.map(({ rec, patient }) => {
-          const name = patient ? `${patient.surname}, ${patient.givenName}` : rec.nhi;
+          const name = patient ? `${capitalCase(patient.surname)}, ${capitalCase(patient.givenName)}` : rec.nhi;
           const age = patient?.dob ? calculateAge(patient.dob) : "";
           const surgeryDisplay = rec.dateOfSurgery ? formatDateTime(rec.dateOfSurgery) : null;
 

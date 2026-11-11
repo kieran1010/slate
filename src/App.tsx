@@ -33,7 +33,9 @@ import { FollowUpDetailScreen } from "./screens/FollowUpDetailScreen";
 import { ArchiveScreen } from "./screens/ArchiveScreen";
 import { ImportScreen } from "./screens/ImportScreen";
 import { SettingsScreen } from "./screens/SettingsScreen";
+import { useLiveQuery } from "dexie-react-hooks";
 import { ensureActiveProfile } from "./data/profiles";
+import { getConfig } from "./data/repository";
 import { DriveStalePrompt } from "./components/DriveStalePrompt";
 import { startDriveSync, resetDriveSync } from "./utils/driveSync";
 import type { Profile } from "./data/db";
@@ -112,6 +114,16 @@ export default function App() {
   const [bannerDismissed, setBannerDismissed] = useState<boolean>(
     () => localStorage.getItem("slateLocalDataWarningDismissed") === "1"
   );
+
+  // Once Google Drive sync is on, the data is no longer on this device
+  // only, so the banner goes away by itself (and comes back if sync is
+  // switched off again, unless it was dismissed).
+  const driveSyncOn = useLiveQuery(
+    async () => (profile ? (await getConfig()).driveBackupEnabled : false),
+    [profile],
+    false
+  );
+  const showBanner = !bannerDismissed && !driveSyncOn;
 
   function dismissBanner() {
     localStorage.setItem("slateLocalDataWarningDismissed", "1");
@@ -355,7 +367,7 @@ export default function App() {
     return (
       <div className="app-shell">
         <Brand appName={APP_NAME} onSettingsOpen={openSettings} />
-        {!bannerDismissed && (
+        {showBanner && (
           <LocalDataBanner onDismiss={dismissBanner} />
         )}
         <div className="loading-screen" aria-live="polite">
@@ -370,8 +382,8 @@ export default function App() {
     <div className="app-shell">
       <Brand appName={APP_NAME} onSettingsOpen={openSettings} />
 
-      {/* Local data warning — shown until permanently dismissed */}
-      {!bannerDismissed && (
+      {/* Local data warning — shown until dismissed or Drive sync is on */}
+      {showBanner && (
         <LocalDataBanner onDismiss={dismissBanner} />
       )}
 
