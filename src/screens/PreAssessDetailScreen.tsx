@@ -15,7 +15,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
-import { ChevronLeft, Archive, ArrowRight, Clipboard, Check } from "lucide-react";
+import { ChevronLeft, Archive, ArrowRight, Clipboard, Check, Trash2 } from "lucide-react";
 import { db } from "../data/db";
 import {
   getPatient,
@@ -23,6 +23,7 @@ import {
   createPreAssess,
   updatePreAssess,
   archiveRecord,
+  deleteRecord,
 } from "../data/repository";
 import {
   RECORD_STATUSES,
@@ -31,11 +32,13 @@ import {
 } from "../data/models";
 import type { RecordStatus } from "../data/models";
 import { AutoTextarea } from "../components/AutoTextarea";
+import { UncertainBanner } from "../components/UncertainBanner";
+import { DELETED } from "../data/syncMerge";
 import { DateTimeField } from "../components/DateTimeField";
 import { useConfig } from "../hooks/useConfig";
 import { formatPreAssess } from "../utils/export";
 import type { NavigateFn } from "../types/nav";
-import { capitalCase } from "../utils/format";
+import { capitalCase, deleteConfirmMessage } from "../utils/format";
 
 interface PreAssessDetailScreenProps {
   id: number | "new";
@@ -102,7 +105,7 @@ export function PreAssessDetailScreen({
   const existing = useLiveQuery(async () => {
     if (isNew) return null;
     const rec = await db.preAssess.get(id as number);
-    if (!rec) return null;
+    if (!rec || rec.archived === DELETED) return null;
     const patient = await getPatient(rec.nhi);
     return { rec, patient };
   }, [id, isNew]);
@@ -259,6 +262,19 @@ export function PreAssessDetailScreen({
     goBack();
   }
 
+  // ── Delete ───────────────────────────────────────────────────
+  async function handleDelete() {
+    if (isNew) return;
+    if (!confirm(deleteConfirmMessage("assessment"))) return;
+    try {
+      await deleteRecord("PRE_ASSESSMENT", id as number);
+      goBack();
+    } catch (err) {
+      console.error("Delete failed:", err);
+      alert("Delete failed — please try again.");
+    }
+  }
+
   // ── Move to Follow-up ────────────────────────────────────────
   // Navigates to the follow-up detail screen pre-filled with the
   // carry-over draft (intervention ← procedure, date ← dateOfSurgery).
@@ -309,6 +325,27 @@ export function PreAssessDetailScreen({
       </div>
 
       <div className="form-body">
+
+        <UncertainBanner fields={[
+          { label: "NHI", value: form.nhi },
+          { label: "Surname", value: form.surname },
+          { label: "Given name", value: form.givenName },
+          { label: "Date of birth", value: form.dob },
+          { label: "Procedure", value: form.procedure },
+          { label: "Surgeon", value: form.surgeon },
+          { label: "Indication", value: form.indicationForSurgery },
+          { label: "Past medical history", value: form.pastMedicalHistory },
+          { label: "Anaesthetic history", value: form.anaestheticHistory },
+          { label: "Social history", value: form.socialHistory },
+          { label: "Functional status", value: form.functionalStatus },
+          { label: "Investigations", value: form.investigations },
+          { label: "Medications", value: form.medications },
+          { label: "Allergies", value: form.allergies },
+          { label: "Weight", value: form.weight },
+          { label: "Height", value: form.height },
+          { label: "Airway assessment", value: form.airwayAssessment },
+          { label: "Notes", value: form.notes },
+        ]} />
 
         {/* ── Patient ──────────────────────────────────────── */}
         <section className="form-section" aria-label="Patient identity">
@@ -557,14 +594,18 @@ export function PreAssessDetailScreen({
                 <><Clipboard size={15} aria-hidden /> Copy pre-assessment summary</>
               )}
             </button>
+            <button className="btn btn-secondary" style={{ width: "100%" }} onClick={handleMoveToFollowUp}>
+              <ArrowRight size={15} aria-hidden />
+              Move to follow-up
+            </button>
             <div className="form-actions-row">
-              <button className="btn btn-secondary" onClick={handleMoveToFollowUp}>
-                <ArrowRight size={15} aria-hidden />
-                Move to follow-up
-              </button>
               <button className="btn btn-danger-soft" onClick={handleArchive}>
                 <Archive size={15} aria-hidden />
                 Archive
+              </button>
+              <button className="btn btn-danger" onClick={() => void handleDelete()}>
+                <Trash2 size={15} aria-hidden />
+                Delete
               </button>
             </div>
           </div>

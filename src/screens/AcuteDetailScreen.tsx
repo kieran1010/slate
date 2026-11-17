@@ -35,7 +35,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
-import { ChevronLeft, Archive, ArrowRight } from "lucide-react";
+import { ChevronLeft, Archive, ArrowRight, Trash2 } from "lucide-react";
 import { db } from "../data/db";
 import {
   getPatient,
@@ -43,7 +43,9 @@ import {
   createAcute,
   updateAcute,
   archiveRecord,
+  deleteRecord,
 } from "../data/repository";
+import { DELETED } from "../data/syncMerge";
 import {
   URGENCIES,
   URGENCY_LABELS,
@@ -53,8 +55,9 @@ import {
 } from "../data/models";
 import type { Urgency, RecordStatus } from "../data/models";
 import { AutoTextarea } from "../components/AutoTextarea";
+import { UncertainBanner } from "../components/UncertainBanner";
 import type { NavigateFn } from "../types/nav";
-import { capitalCase } from "../utils/format";
+import { capitalCase, deleteConfirmMessage } from "../utils/format";
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -126,7 +129,7 @@ export function AcuteDetailScreen({
       // which is fine, but batching keeps it to one round-trip.
       db.patients.toArray(),
     ]);
-    if (!rec) return null;
+    if (!rec || rec.archived === DELETED) return null;
     const patient = patients.find((p) => p.nhi === rec.nhi);
     return { rec, patient };
   }, [id, isNew]);
@@ -257,6 +260,19 @@ export function AcuteDetailScreen({
     goBack();
   }
 
+  // ── Delete ───────────────────────────────────────────────────
+  async function handleDelete() {
+    if (isNew) return;
+    if (!confirm(deleteConfirmMessage("referral"))) return;
+    try {
+      await deleteRecord("ACUTE", id as number);
+      goBack();
+    } catch (err) {
+      console.error("Delete failed:", err);
+      alert("Delete failed — please try again.");
+    }
+  }
+
   // ── Move to Follow-up ────────────────────────────────────────
   // Navigates to the follow-up detail screen pre-filled with the
   // carry-over draft (intervention ← taskToComplete, date ← createdAt).
@@ -332,6 +348,17 @@ export function AcuteDetailScreen({
 
       {/* ── Form body ──────────────────────────────────────── */}
       <div className="form-body">
+
+        <UncertainBanner fields={[
+          { label: "NHI", value: form.nhi },
+          { label: "Surname", value: form.surname },
+          { label: "Given name", value: form.givenName },
+          { label: "Date of birth", value: form.dob },
+          { label: "Location", value: form.location },
+          { label: "Background", value: form.background },
+          { label: "Task to complete", value: form.taskToComplete },
+          { label: "Notes", value: form.notes },
+        ]} />
 
         {/* ── Patient section ──────────────────────────────── */}
         <section className="form-section" aria-label="Patient identity">
@@ -555,20 +582,28 @@ export function AcuteDetailScreen({
         {/* ── Actions (existing records only) ──────────────── */}
         {!isNew && (
           <div className="form-actions">
+            <button
+              className="btn btn-secondary"
+              style={{ width: "100%" }}
+              onClick={handleMoveToFollowUp}
+            >
+              <ArrowRight size={15} aria-hidden />
+              Move to follow-up
+            </button>
             <div className="form-actions-row">
-              <button
-                className="btn btn-secondary"
-                onClick={handleMoveToFollowUp}
-              >
-                <ArrowRight size={15} aria-hidden />
-                Move to follow-up
-              </button>
               <button
                 className="btn btn-danger-soft"
                 onClick={handleArchive}
               >
                 <Archive size={15} aria-hidden />
                 Archive
+              </button>
+              <button
+                className="btn btn-danger"
+                onClick={() => void handleDelete()}
+              >
+                <Trash2 size={15} aria-hidden />
+                Delete
               </button>
             </div>
           </div>

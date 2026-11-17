@@ -50,6 +50,17 @@ export function formatDateTimeDMY(iso: string): string {
   return timePart ? `${date}, ${timePart}` : date;
 }
 
+// The confirm shown before a record is deleted. Deletion reaches every
+// synced device and wipes the record's contents, so it says so plainly.
+export function deleteConfirmMessage(noun: string): string {
+  return (
+    `Delete this ${noun} permanently?\n\n` +
+    "Its contents will be erased from this device, and from your other devices " +
+    "and Google Drive when they next sync. This can't be undone — use Archive " +
+    "instead if you might need it again."
+  );
+}
+
 // Patient names are shown and stored in Capital Case: the first letter
 // of each word is upper case and the rest lower case. Hyphens and
 // apostrophes start a new word ("SMITH-JONES" → "Smith-Jones",

@@ -6,19 +6,19 @@
 //
 // Stages:
 //   idle     → file/photo picker UI
-//   loading  → spinner while the Anthropic API call runs
-//   done     → extracted fields shown for review; uncertain
-//              values (prefixed "[UNCERTAIN]") highlighted amber
+//   loading  → spinner while the Anthropic API call runs, then
+//              while the record is created
 //   error    → error message with a retry option
 //
-// "Create record and review" creates the record in IndexedDB
-// (upserts the patient master first if identity was found) then
-// navigates to the detail/edit screen so the user can review
-// every field, correct uncertainties, and save.
+// There is no review step: once the document is read, the record is
+// created in IndexedDB (upserting the patient master first if identity
+// was found) and the detail/edit screen opens on it, so the user
+// reviews every field there, corrects uncertainties, and saves.
 //
 // The [UNCERTAIN] prefix is preserved in stored values so it
-// remains visible in the edit form. The user removes it when
-// they're satisfied the value is correct.
+// remains visible in the edit form, where UncertainBanner lists the
+// fields that carry it. The user removes it when they're satisfied
+// the value is correct.
 //
 // FILE LOCATION:
 //   src/screens/ImportScreen.tsx
@@ -31,8 +31,6 @@ import {
   fileToBase64,
   callImportApi,
   normaliseDob,
-  isUncertain,
-  displayValue,
   type ImportModule,
   type ExtractedData,
 } from "../utils/importAi";
@@ -53,61 +51,14 @@ interface ImportScreenProps {
   goBack: () => void;
 }
 
-type Stage = "idle" | "loading" | "done" | "error";
+type Stage = "idle" | "loading" | "error";
 
 // ── Per-module metadata ───────────────────────────────────────
-// Field definitions drive the preview: label, key, and whether
-// to show it in the summary (all keys are stored but only
-// labelled ones are previewed — avoids showing null fields).
-
-interface FieldDef { label: string; key: string }
 
 const MODULE_TITLE: Record<ImportModule, string> = {
   "acute":      "Import acute referral",
   "pre-assess": "Import pre-assessment",
   "follow-up":  "Import follow-up",
-};
-
-const MODULE_FIELDS: Record<ImportModule, FieldDef[]> = {
-  "acute": [
-    { label: "NHI",             key: "nhi" },
-    { label: "Surname",         key: "surname" },
-    { label: "Given name",      key: "givenName" },
-    { label: "Date of birth",   key: "dob" },
-    { label: "Location",        key: "location" },
-    { label: "Background",      key: "background" },
-    { label: "Task to complete",key: "taskToComplete" },
-  ],
-  "pre-assess": [
-    { label: "NHI",                   key: "nhi" },
-    { label: "Surname",               key: "surname" },
-    { label: "Given name",            key: "givenName" },
-    { label: "Date of birth",         key: "dob" },
-    { label: "Procedure",             key: "procedure" },
-    { label: "Surgeon",               key: "surgeon" },
-    { label: "Indication",            key: "indicationForSurgery" },
-    { label: "Past medical history",  key: "pastMedicalHistory" },
-    { label: "Anaesthetic history",   key: "anaestheticHistory" },
-    { label: "Social history",        key: "socialHistory" },
-    { label: "Functional status",     key: "functionalStatus" },
-    { label: "Investigations",        key: "investigations" },
-    { label: "Medications",           key: "medications" },
-    { label: "Allergies",             key: "allergies" },
-    { label: "Weight (kg)",           key: "weight" },
-    { label: "Height (cm)",           key: "height" },
-    { label: "Airway assessment",     key: "airwayAssessment" },
-    { label: "Notes",                 key: "notes" },
-  ],
-  "follow-up": [
-    { label: "NHI",               key: "nhi" },
-    { label: "Surname",           key: "surname" },
-    { label: "Given name",        key: "givenName" },
-    { label: "Date of birth",     key: "dob" },
-    { label: "Intervention",      key: "intervention" },
-    { label: "Intervention date", key: "interventionDate" },
-    { label: "Phone number",      key: "phoneNumber" },
-    { label: "Outcome",           key: "outcome" },
-  ],
 };
 
 // ── Component ─────────────────────────────────────────────────
@@ -118,9 +69,8 @@ export function ImportScreen({ module, navigate, goBack }: ImportScreenProps) {
   const fileRef  = useRef<HTMLInputElement>(null);
 
   const [stage, setStage]       = useState<Stage>("idle");
-  const [extracted, setExtracted] = useState<ExtractedData>({});
+  const [loadingMsg, setLoadingMsg] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
-  const [creating, setCreating] = useState(false);
 
   // ── File handling ───────────────────────────────────────────
 
@@ -142,112 +92,122 @@ export function ImportScreen({ module, navigate, goBack }: ImportScreenProps) {
       return;
     }
 
+    setLoadingMsg("Analysing document…");
     setStage("loading");
+    let extracted: ExtractedData;
     try {
       const base64 = await fileToBase64(file);
       const prompt = getSystemPrompt(module);
-      const result = await callImportApi(
+      extracted = await callImportApi(
         config.anthropicApiKey,
         prompt,
         base64,
         file.type
       );
-      setExtracted(result);
-      setStage("done");
     } catch (err) {
       setErrorMsg(
         err instanceof Error ? err.message : "Import failed — please try again."
       );
       setStage("error");
+      return;
     }
+
+    // Nothing usable read: say so, rather than open an empty record.
+    const anything = Object.values(extracted).some(
+      (v) => v !== null && v !== undefined && String(v).trim() !== ""
+    );
+    if (!anything) {
+      setErrorMsg(
+        "No details could be read from this document. Try a clearer photo or a different file."
+      );
+      setStage("error");
+      return;
+    }
+
+    setLoadingMsg("Creating record…");
+    try {
+      await createRecord(extracted);
+    } catch (err) {
+      console.error("Create record failed:", err);
+      setErrorMsg("The document was read, but the record couldn't be created. Please try again.");
+      setStage("error");
+    }
+    // On success we've navigated to the new record — nothing to reset.
   }
 
   // ── Create record ───────────────────────────────────────────
+  // Creates the record from the extracted fields and opens it.
 
-  async function handleCreate() {
-    setCreating(true);
-    try {
-      const nhi = ((extracted.nhi as string) || "").trim().toUpperCase();
+  async function createRecord(extracted: ExtractedData) {
+    // The model is asked for strings but may send a number (e.g. weight).
+    const safe = (key: string): string => {
+      const v = extracted[key];
+      return v === null || v === undefined ? "" : String(v).trim();
+    };
+    const nhi = safe("nhi").toUpperCase();
 
-      // Upsert patient master record if we have identity fields
-      if (nhi && (extracted.surname || extracted.givenName)) {
-        await upsertPatient({
-          nhi,
-          surname: ((extracted.surname as string) || "").trim(),
-          givenName: ((extracted.givenName as string) || "").trim(),
-          dob: normaliseDob(extracted.dob as string),
-        });
-      }
-
-      // Create the module-specific record and navigate to edit it
-      const safe = (key: string): string =>
-        ((extracted[key] as string) || "").trim();
-
-      if (module === "acute") {
-        const id = await createAcute({
-          nhi: nhi || "UNKNOWN",
-          location:       safe("location"),
-          background:     safe("background"),
-          taskToComplete: safe("taskToComplete"),
-          urgency: "ROUTINE",
-          status:  "PENDING",
-          notes:   "",
-        });
-        navigate({ tab: "acute", view: "detail", id });
-
-      } else if (module === "pre-assess") {
-        const id = await createPreAssess({
-          nhi: nhi || "UNKNOWN",
-          dateOfSurgery:        "",
-          procedure:            safe("procedure"),
-          surgeon:              safe("surgeon"),
-          indicationForSurgery: safe("indicationForSurgery"),
-          pastMedicalHistory:   safe("pastMedicalHistory"),
-          anaestheticHistory:   safe("anaestheticHistory"),
-          socialHistory:        safe("socialHistory"),
-          functionalStatus:     safe("functionalStatus"),
-          investigations:       safe("investigations"),
-          medications:          safe("medications"),
-          allergies:            safe("allergies"),
-          weight:               safe("weight"),
-          height:               safe("height"),
-          airwayAssessment:     safe("airwayAssessment"),
-          notes:                safe("notes"),
-          status: "PENDING",
-        });
-        navigate({ tab: "pre-assess", view: "detail", id });
-
-      } else {
-        const id = await createFollowUp({
-          nhi: nhi || "UNKNOWN",
-          intervention:    safe("intervention"),
-          interventionDate: safe("interventionDate"),
-          followUpType:    "OFFSET",
-          followUpDue:     "",
-          outcome:         safe("outcome"),
-          phoneNumber:     safe("phoneNumber"),
-          notes:           "",
-          status: "PENDING",
-        });
-        navigate({ tab: "follow-up", view: "detail", id });
-      }
-    } catch (err) {
-      console.error("Create record failed:", err);
-      alert("Failed to create record — please try again.");
-      setCreating(false);
+    // Upsert patient master record if we have identity fields
+    if (nhi && (safe("surname") || safe("givenName"))) {
+      await upsertPatient({
+        nhi,
+        surname: safe("surname"),
+        givenName: safe("givenName"),
+        dob: normaliseDob(safe("dob")),
+      });
     }
-    // Note: don't reset creating on success — we're navigating away
+
+    // Create the module-specific record and navigate to edit it.
+    if (module === "acute") {
+      const id = await createAcute({
+        nhi: nhi || "UNKNOWN",
+        location:       safe("location"),
+        background:     safe("background"),
+        taskToComplete: safe("taskToComplete"),
+        urgency: "ROUTINE",
+        status:  "PENDING",
+        notes:   "",
+      });
+      navigate({ tab: "acute", view: "detail", id });
+
+    } else if (module === "pre-assess") {
+      const id = await createPreAssess({
+        nhi: nhi || "UNKNOWN",
+        dateOfSurgery:        "",
+        procedure:            safe("procedure"),
+        surgeon:              safe("surgeon"),
+        indicationForSurgery: safe("indicationForSurgery"),
+        pastMedicalHistory:   safe("pastMedicalHistory"),
+        anaestheticHistory:   safe("anaestheticHistory"),
+        socialHistory:        safe("socialHistory"),
+        functionalStatus:     safe("functionalStatus"),
+        investigations:       safe("investigations"),
+        medications:          safe("medications"),
+        allergies:            safe("allergies"),
+        weight:               safe("weight"),
+        height:               safe("height"),
+        airwayAssessment:     safe("airwayAssessment"),
+        notes:                safe("notes"),
+        status: "PENDING",
+      });
+      navigate({ tab: "pre-assess", view: "detail", id });
+
+    } else {
+      const id = await createFollowUp({
+        nhi: nhi || "UNKNOWN",
+        intervention:    safe("intervention"),
+        interventionDate: safe("interventionDate"),
+        followUpType:    "OFFSET",
+        followUpDue:     "",
+        outcome:         safe("outcome"),
+        phoneNumber:     safe("phoneNumber"),
+        notes:           "",
+        status: "PENDING",
+      });
+      navigate({ tab: "follow-up", view: "detail", id });
+    }
   }
 
   // ── Render ───────────────────────────────────────────────────
-
-  const fields = MODULE_FIELDS[module];
-  // Count how many fields were actually extracted (non-null, non-empty)
-  const extractedCount = fields.filter(
-    (f) => extracted[f.key] !== null && extracted[f.key] !== undefined && extracted[f.key] !== ""
-  ).length;
-  // Count uncertain fields for the warning banner
-  const uncertainCount = fields.filter((f) => isUncertain(extracted[f.key])).length;
 
   return (
     <div>
@@ -288,8 +248,8 @@ export function ImportScreen({ module, navigate, goBack }: ImportScreenProps) {
             </p>
             <p style={{ fontSize: "0.82rem", color: "var(--muted)", lineHeight: 1.6 }}>
               The document will be sent to the Anthropic API using your API key.
-              Clinical information will be extracted and pre-filled into a new record
-              for you to review before saving.
+              Clinical information will be extracted into a new record, which opens
+              for you to check and correct.
             </p>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "center", marginTop: 8 }}>
               {/* Camera button — opens device camera on mobile */}
@@ -352,7 +312,7 @@ export function ImportScreen({ module, navigate, goBack }: ImportScreenProps) {
             aria-hidden
           />
           <p style={{ color: "var(--muted)", fontSize: "0.9rem" }}>
-            Analysing document…
+            {loadingMsg}
           </p>
           <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
         </div>
@@ -400,129 +360,6 @@ export function ImportScreen({ module, navigate, goBack }: ImportScreenProps) {
         </div>
       )}
 
-      {/* ── STAGE: done ────────────────────────────────────── */}
-      {stage === "done" && (
-        <div className="form-body">
-
-          {/* Summary banner */}
-          <div
-            style={{
-              background: "var(--pale)",
-              border: "1px solid #b2dce2",
-              borderRadius: 10,
-              padding: "12px 16px",
-              fontSize: "0.82rem",
-              color: "var(--teal)",
-              lineHeight: 1.6,
-            }}
-          >
-            {extractedCount} field{extractedCount !== 1 ? "s" : ""} extracted.
-            {uncertainCount > 0 && (
-              <> <span style={{ color: "#92400E", fontWeight: 500 }}>
-                {uncertainCount} marked uncertain
-              </span> — please review these carefully.</>
-            )}
-          </div>
-
-          {/* Uncertain fields warning */}
-          {uncertainCount > 0 && (
-            <div className="ai-warning">
-              <p className="ai-warning-title">
-                <AlertTriangle size={16} aria-hidden />
-                Review required
-              </p>
-              <p>
-                Fields highlighted in amber could not be determined with confidence.
-                They are pre-filled but marked <strong>[UNCERTAIN]</strong> — please
-                verify and correct them before saving.
-              </p>
-            </div>
-          )}
-
-          {/* Extracted field preview */}
-          <section className="form-section" aria-label="Extracted data">
-            <div className="form-section-title">Extracted data</div>
-            {fields.map((f) => {
-              const raw = extracted[f.key];
-              if (raw === null || raw === undefined || raw === "") return null;
-              const uncertain = isUncertain(raw);
-              const value = displayValue(raw);
-              return (
-                <div
-                  key={f.key}
-                  className="form-field"
-                  style={
-                    uncertain
-                      ? { background: "#FFFBEB", borderLeftColor: "#F59E0B" }
-                      : undefined
-                  }
-                >
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "baseline",
-                      justifyContent: "space-between",
-                      gap: 8,
-                    }}
-                  >
-                    <span className="form-label" style={uncertain ? { color: "#92400E" } : undefined}>
-                      {f.label}
-                    </span>
-                    {uncertain && (
-                      <span
-                        style={{
-                          fontSize: "0.62rem",
-                          fontWeight: 600,
-                          letterSpacing: "0.08em",
-                          textTransform: "uppercase",
-                          color: "#92400E",
-                          background: "#FEF3C7",
-                          borderRadius: 4,
-                          padding: "1px 6px",
-                          flexShrink: 0,
-                        }}
-                      >
-                        Uncertain
-                      </span>
-                    )}
-                  </div>
-                  <p
-                    style={{
-                      fontSize: "0.9rem",
-                      color: uncertain ? "#92400E" : "var(--text)",
-                      whiteSpace: "pre-wrap",
-                      lineHeight: 1.5,
-                    }}
-                  >
-                    {value}
-                  </p>
-                </div>
-              );
-            })}
-          </section>
-
-          {/* Actions */}
-          <div className="form-actions">
-            <button
-              className="btn btn-primary"
-              style={{ width: "100%" }}
-              onClick={handleCreate}
-              disabled={creating}
-              aria-busy={creating}
-            >
-              {creating ? "Creating record…" : "Create record and review →"}
-            </button>
-            <button
-              className="btn btn-secondary"
-              style={{ width: "100%" }}
-              onClick={() => { setStage("idle"); setExtracted({}); }}
-            >
-              <RefreshCw size={14} aria-hidden />
-              Import a different document
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

@@ -22,10 +22,15 @@
 //     token is already in hand.
 //
 // AUTH:
-//   Automatic syncs ask Google for a token silently (prompt "none") —
-//   no popup, no re-authenticating. If Google won't issue one without
-//   a tap (e.g. access was revoked), the sync stops quietly with state
-//   "needs-reconnect", and the next Sync now tap fixes it.
+//   Automatic syncs ask Google for a token silently (prompt "none").
+//   Tokens live in memory for about an hour, and are lost whenever the
+//   app is closed. Google renews one through a small window of its own,
+//   which a browser only lets open from a tap — so a background renewal
+//   is usually blocked (always, in practice, on Android). The sync then
+//   stops with state "needs-reconnect", and the header shows a "Tap to
+//   sync" button (components/Brand.tsx): that tap, or Sync now in
+//   Settings, gets a new token and syncs. Failed syncs (state "error")
+//   show the same button. Changes made meanwhile wait, and sync then.
 //
 // PASSPHRASE:
 //   The Drive copy is encrypted with the passphrase saved on this
@@ -289,9 +294,10 @@ function onLocalChange(): void {
   // step outside it before looking anything up.
   void Dexie.ignoreTransaction(() => autoSyncAllowed()).then((ok) => {
     if (!ok) return;
-    if (status.state !== "syncing" && status.state !== "wrong-passphrase") {
-      setStatus({ state: "pending", message: status.state === "needs-reconnect" ? status.message : "" });
-    }
+    // Only a healthy state becomes "pending". A failure stays on show
+    // (in Settings and the header) until a sync actually succeeds:
+    // "Changes will sync shortly" would be untrue while Google needs a tap.
+    if (status.state === "idle" || status.state === "synced") setStatus({ state: "pending" });
     schedule(DEBOUNCE_MS);
   });
 }

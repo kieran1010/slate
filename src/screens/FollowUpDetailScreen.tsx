@@ -33,7 +33,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
-import { ChevronLeft, Archive } from "lucide-react";
+import { ChevronLeft, Archive, Trash2 } from "lucide-react";
 import { db } from "../data/db";
 import {
   getPatient,
@@ -41,6 +41,7 @@ import {
   createFollowUp,
   updateFollowUp,
   archiveRecord,
+  deleteRecord,
   getConfig,
   buildMoveToFollowUpDraft,
   commitMoveToFollowUp,
@@ -55,9 +56,11 @@ import {
 import type { FollowUpType, RecordStatus } from "../data/models";
 import { dateAddHours } from "../data/dates";
 import { AutoTextarea } from "../components/AutoTextarea";
+import { UncertainBanner } from "../components/UncertainBanner";
+import { DELETED } from "../data/syncMerge";
 import { DateTimeField } from "../components/DateTimeField";
 import type { NavigateFn } from "../types/nav";
-import { capitalCase } from "../utils/format";
+import { capitalCase, deleteConfirmMessage } from "../utils/format";
 
 interface FollowUpDetailScreenProps {
   id: number | "new";
@@ -116,7 +119,7 @@ export function FollowUpDetailScreen({
   const existing = useLiveQuery(async () => {
     if (isNew) return null;
     const rec = await db.followUp.get(id as number);
-    if (!rec) return null;
+    if (!rec || rec.archived === DELETED) return null;
     const patient = await getPatient(rec.nhi);
     return { rec, patient };
   }, [id, isNew]);
@@ -290,6 +293,19 @@ export function FollowUpDetailScreen({
     goBack();
   }
 
+  // ── Delete ───────────────────────────────────────────────────
+  async function handleDelete() {
+    if (isNew) return;
+    if (!confirm(deleteConfirmMessage("follow-up"))) return;
+    try {
+      await deleteRecord("FOLLOW_UP", id as number);
+      goBack();
+    } catch (err) {
+      console.error("Delete failed:", err);
+      alert("Delete failed — please try again.");
+    }
+  }
+
   // ── Loading states ───────────────────────────────────────────
   if (!isNew && !initialized) {
     if (existing === null)
@@ -351,6 +367,18 @@ export function FollowUpDetailScreen({
       )}
 
       <div className="form-body">
+
+        <UncertainBanner fields={[
+          { label: "NHI", value: form.nhi },
+          { label: "Surname", value: form.surname },
+          { label: "Given name", value: form.givenName },
+          { label: "Date of birth", value: form.dob },
+          { label: "Intervention", value: form.intervention },
+          { label: "Intervention date", value: form.interventionDate },
+          { label: "Phone number", value: form.phoneNumber },
+          { label: "Outcome", value: form.outcome },
+          { label: "Notes", value: form.notes },
+        ]} />
 
         {/* ── Patient ──────────────────────────────────────── */}
         <section className="form-section" aria-label="Patient identity">
@@ -520,6 +548,10 @@ export function FollowUpDetailScreen({
               <button className="btn btn-danger-soft" onClick={handleArchive}>
                 <Archive size={15} aria-hidden />
                 Archive
+              </button>
+              <button className="btn btn-danger" onClick={() => void handleDelete()}>
+                <Trash2 size={15} aria-hidden />
+                Delete
               </button>
             </div>
           </div>

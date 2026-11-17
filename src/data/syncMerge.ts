@@ -28,9 +28,13 @@
 //   with their times kept in config.settingsFieldTimes.
 //
 // DELETION:
-//   Slate never hard-deletes a clinical record from the UI (it archives
-//   — a field change, which merges like any other), so there are no
-//   tombstones. Erasing a device is local only; see SettingsScreen.
+//   Deleting a record never removes its row: it sets archived = 2 and
+//   wipes the clinical text (see deleteRecord in repository.ts), leaving
+//   a marker that travels with the sync. A deletion always wins — even
+//   over a later edit made on another device before it heard of the
+//   deletion — otherwise that edit would bring the record back (with
+//   its wiped fields) on every device. Erasing a device is local only;
+//   see SettingsScreen.
 //
 // FILE LOCATION:
 //   src/data/syncMerge.ts
@@ -143,15 +147,29 @@ function fieldTime(row: Row, field: string): string {
   return row.fieldTimes?.[field] ?? legacyStamp(row.updatedAt);
 }
 
+/** `archived` value marking a deleted record (see DELETION above). */
+export const DELETED = 2;
+
+export function isDeletedRow(row: Record<string, unknown>): boolean {
+  return row.archived === DELETED;
+}
+
 /** Merges two copies of the same row, field by field. */
 export function mergeRow<T extends Row>(a: T, b: T): T {
+  // When only one copy is deleted, its (wiped) values win outright. The
+  // result is the same whichever device does the merge.
+  const deleted = isDeletedRow(a) === isDeletedRow(b) ? null : isDeletedRow(a) ? a : b;
   const merged: Row = {};
   const fieldTimes: FieldTimes = {};
   const fields = new Set([...syncedFields(a), ...syncedFields(b)]);
   for (const f of fields) {
     const ta = fieldTime(a, f);
     const tb = fieldTime(b, f);
-    merged[f] = ta > tb ? a[f] : tb > ta ? b[f] : pickTied(a[f], b[f]);
+    if (deleted) {
+      if (f in deleted) merged[f] = deleted[f];
+    } else {
+      merged[f] = ta > tb ? a[f] : tb > ta ? b[f] : pickTied(a[f], b[f]);
+    }
     const t = later(ta, tb);
     if (t && t !== EPOCH) fieldTimes[f] = t;
   }

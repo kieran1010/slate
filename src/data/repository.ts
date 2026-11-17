@@ -55,6 +55,7 @@ import {
   mergeModule,
   mergePatients,
   mergeSettings,
+  DELETED,
   type FieldTimes,
 } from "./syncMerge";
 import { getActiveProfileId } from "./profiles";
@@ -116,7 +117,9 @@ async function updateStamped(table: ClinicalTable, id: number, changes: Record<s
   const rows = table as unknown as Table<Record<string, unknown>, number>;
   await db.transaction("rw", rows, async () => {
     const existing = await rows.get(id);
-    if (!existing) return;
+    // A deleted record stays deleted: an edit (say, from a form that was
+    // open when a sync deleted it) must not write its contents back.
+    if (!existing || existing.archived === DELETED) return;
     await rows.update(id, {
       ...changes,
       fieldTimes: stampChanges(existing, changes),
@@ -334,17 +337,37 @@ export async function restoreRecord(
   }
 }
 
-// Hard delete — rarely needed (e.g. a mis-entered record). Prefer
-// archiveRecord for normal "remove from view" so nothing is lost.
+// Fields a deleted record keeps: its identity and bookkeeping (so sync
+// can still match it up on other devices) and the fixed-choice fields.
+// Every other text field — the clinical content — is wiped.
+const KEPT_ON_DELETE = new Set([
+  "id", "profileId", "uid", "uidMigrated", "fieldTimes", "nhi",
+  "createdAt", "updatedAt", "archived", "archivedAt",
+  "status", "urgency", "followUpType",
+]);
+
+// Deletes a record for good, on every synced device. The row is not
+// removed: it becomes a marker (archived = DELETED, clinical text wiped)
+// so the next sync deletes it elsewhere too, rather than the copy in
+// Drive bringing it back. See DELETION in syncMerge.ts. Deleted records
+// never appear in lists, the archive, searches or CSV exports.
 export async function deleteRecord(
   module: ArchivedItem["module"],
   id: number
 ): Promise<void> {
-  switch (module) {
-    case "ACUTE": await db.acute.delete(id); break;
-    case "PRE_ASSESSMENT": await db.preAssess.delete(id); break;
-    case "FOLLOW_UP": await db.followUp.delete(id); break;
-  }
+  const table =
+    module === "ACUTE" ? db.acute : module === "PRE_ASSESSMENT" ? db.preAssess : db.followUp;
+  const rows = table as unknown as Table<Record<string, unknown>, number>;
+  await db.transaction("rw", rows, async () => {
+    const existing = await rows.get(id);
+    if (!existing || existing.archived === DELETED) return;
+    const now = nowIso();
+    const changes: Record<string, unknown> = { archived: DELETED, archivedAt: now, updatedAt: now };
+    for (const [field, value] of Object.entries(existing)) {
+      if (!KEPT_ON_DELETE.has(field) && typeof value === "string") changes[field] = "";
+    }
+    await rows.update(id, { ...changes, fieldTimes: stampChanges(existing, changes) });
+  });
 }
 
 // ============================================================
@@ -508,23 +531,31 @@ export async function saveConfig(changes: Partial<AppConfig>): Promise<void> {
 // ============================================================
 // FULL-DATA QUERIES  (for export — includes archived records)
 // ============================================================
+// Deleted records are left out unless includeDeleted is set. Only the
+// encrypted backup / Drive sync payload sets it: the deletion markers
+// must travel so other devices delete those records too.
 
-export async function listAllAcute(): Promise<StoredAcute[]> {
+export interface ListAllOptions { includeDeleted?: boolean }
+
+export async function listAllAcute({ includeDeleted = false }: ListAllOptions = {}): Promise<StoredAcute[]> {
   const pid = await getActiveProfileId();
   if (!pid) return [];
-  return db.acute.where("profileId").equals(pid).toArray();
+  const rows = await db.acute.where("profileId").equals(pid).toArray();
+  return includeDeleted ? rows : rows.filter((r) => r.archived !== DELETED);
 }
 
-export async function listAllPreAssess(): Promise<StoredPreAssess[]> {
+export async function listAllPreAssess({ includeDeleted = false }: ListAllOptions = {}): Promise<StoredPreAssess[]> {
   const pid = await getActiveProfileId();
   if (!pid) return [];
-  return db.preAssess.where("profileId").equals(pid).toArray();
+  const rows = await db.preAssess.where("profileId").equals(pid).toArray();
+  return includeDeleted ? rows : rows.filter((r) => r.archived !== DELETED);
 }
 
-export async function listAllFollowUp(): Promise<StoredFollowUp[]> {
+export async function listAllFollowUp({ includeDeleted = false }: ListAllOptions = {}): Promise<StoredFollowUp[]> {
   const pid = await getActiveProfileId();
   if (!pid) return [];
-  return db.followUp.where("profileId").equals(pid).toArray();
+  const rows = await db.followUp.where("profileId").equals(pid).toArray();
+  return includeDeleted ? rows : rows.filter((r) => r.archived !== DELETED);
 }
 
 // ============================================================
@@ -571,10 +602,11 @@ export type ImportMode = "replace" | "merge";
 export async function hasAnyLocalData(): Promise<boolean> {
   const pid = await getActiveProfileId();
   if (!pid) return false;
+  const live = (r: { archived: number }) => r.archived !== DELETED;
   const [acute, preAssess, followUp, patients] = await Promise.all([
-    db.acute.where("profileId").equals(pid).count(),
-    db.preAssess.where("profileId").equals(pid).count(),
-    db.followUp.where("profileId").equals(pid).count(),
+    db.acute.where("profileId").equals(pid).filter(live).count(),
+    db.preAssess.where("profileId").equals(pid).filter(live).count(),
+    db.followUp.where("profileId").equals(pid).filter(live).count(),
     db.patients.where("profileId").equals(pid).count(),
   ]);
   return acute + preAssess + followUp + patients > 0;
