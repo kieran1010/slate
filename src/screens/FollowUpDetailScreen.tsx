@@ -33,7 +33,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
-import { ChevronLeft, Archive } from "lucide-react";
+import { ChevronLeft, Archive, Trash2 } from "lucide-react";
 import { db } from "../data/db";
 import {
   getPatient,
@@ -41,6 +41,7 @@ import {
   createFollowUp,
   updateFollowUp,
   archiveRecord,
+  deleteRecord,
   getConfig,
   buildMoveToFollowUpDraft,
   commitMoveToFollowUp,
@@ -50,14 +51,17 @@ import {
   FOLLOW_UP_TYPE_LABELS,
   RECORD_STATUSES,
   RECORD_STATUS_LABELS,
-  calculateAge,
 } from "../data/models";
 import type { FollowUpType, RecordStatus } from "../data/models";
 import { dateAddHours } from "../data/dates";
 import { AutoTextarea } from "../components/AutoTextarea";
+import { UncertainBanner } from "../components/UncertainBanner";
+import { PatientFields, usePatientLookup } from "../components/PatientFields";
+import { DELETED } from "../data/syncMerge";
 import { DateTimeField } from "../components/DateTimeField";
 import type { NavigateFn } from "../types/nav";
-import { capitalCase } from "../utils/format";
+import { deleteConfirmMessage } from "../utils/format";
+import { renewDriveAccessOnTap } from "../utils/driveSync";
 
 interface FollowUpDetailScreenProps {
   id: number | "new";
@@ -101,7 +105,6 @@ export function FollowUpDetailScreen({
   const isDraft = isNew && !!draftSource;
 
   const [form, setForm] = useState<FormState>(DEFAULT_FORM);
-  const [patientStatus, setPatientStatus] = useState<"idle" | "found" | "new">("idle");
   const [defaultFollowUpHours, setDefaultFollowUpHours] = useState(24);
   const [errors, setErrors] = useState<Partial<Record<keyof FormState, string>>>({});
   const [saving, setSaving] = useState(false);
@@ -116,7 +119,7 @@ export function FollowUpDetailScreen({
   const existing = useLiveQuery(async () => {
     if (isNew) return null;
     const rec = await db.followUp.get(id as number);
-    if (!rec) return null;
+    if (!rec || rec.archived === DELETED) return null;
     const patient = await getPatient(rec.nhi);
     return { rec, patient };
   }, [id, isNew]);
@@ -139,7 +142,6 @@ export function FollowUpDetailScreen({
       notes: rec.notes,
       status: rec.status,
     });
-    setPatientStatus(patient ? "found" : "idle");
     setInitialized(true);
   }, [existing, initialized, isNew]);
 
@@ -167,29 +169,18 @@ export function FollowUpDetailScreen({
             givenName: p.givenName,
             dob: p.dob,
           }));
-          setPatientStatus("found");
         }
       });
       setInitialized(true);
     });
   }, [isDraft, draftSource, initialized]);
 
-  // ── NHI patient lookup (plain-new mode only) ──────────────────
-  useEffect(() => {
-    if (!isNew || isDraft) return; // draft already resolved patient
-    const nhi = form.nhi.trim().toUpperCase();
-    if (nhi.length < 3) { setPatientStatus("idle"); return; }
-    const timer = setTimeout(async () => {
-      const p = await getPatient(nhi);
-      if (p) {
-        setForm((f) => ({ ...f, surname: p.surname, givenName: p.givenName, dob: p.dob }));
-        setPatientStatus("found");
-      } else {
-        setPatientStatus("new");
-      }
-    }, 400);
-    return () => clearTimeout(timer);
-  }, [form.nhi, isNew, isDraft]);
+  // ── NHI patient lookup ───────────────────────────────────────
+  // Changing the NHI to a known patient brings in their details. In
+  // draft mode the draft load fills them in first.
+  const patientStatus = usePatientLookup(form.nhi, isDraft ? initialized : isNew || initialized, (p) =>
+    setForm((f) => ({ ...f, surname: p.surname, givenName: p.givenName, dob: p.dob }))
+  );
 
   // ── Auto-calculate followUpDue when type is OFFSET ───────────
   useEffect(() => {
@@ -226,6 +217,7 @@ export function FollowUpDetailScreen({
   // ── Save ─────────────────────────────────────────────────────
   async function handleSave() {
     if (!validate()) return;
+    renewDriveAccessOnTap(); // a tap: renew Google Drive access if it has run out
     setSaving(true);
     try {
       const nhi = form.nhi.trim().toUpperCase();
@@ -286,8 +278,23 @@ export function FollowUpDetailScreen({
   async function handleArchive() {
     if (isNew) return;
     if (!confirm("Archive this follow-up? It can be restored later.")) return;
+    renewDriveAccessOnTap(); // a tap: renew Google Drive access if it has run out
     await archiveRecord("FOLLOW_UP", id as number);
     goBack();
+  }
+
+  // ── Delete ───────────────────────────────────────────────────
+  async function handleDelete() {
+    if (isNew) return;
+    if (!confirm(deleteConfirmMessage("follow-up"))) return;
+    renewDriveAccessOnTap(); // a tap: renew Google Drive access if it has run out
+    try {
+      await deleteRecord("FOLLOW_UP", id as number);
+      goBack();
+    } catch (err) {
+      console.error("Delete failed:", err);
+      alert("Delete failed — please try again.");
+    }
   }
 
   // ── Loading states ───────────────────────────────────────────
@@ -308,10 +315,6 @@ export function FollowUpDetailScreen({
     return <div className="loading-screen">Loading follow-up details…</div>;
   }
 
-  const age = form.dob ? calculateAge(form.dob) : "";
-  // In draft mode the patient is resolved from the source record;
-  // treat them as found (identity is read-only).
-  const identityReadOnly = !isNew || patientStatus === "found" || isDraft;
 
   const title = isDraft
     ? "Move to follow-up"
@@ -352,71 +355,30 @@ export function FollowUpDetailScreen({
 
       <div className="form-body">
 
+        <UncertainBanner fields={[
+          { label: "NHI", value: form.nhi },
+          { label: "Surname", value: form.surname },
+          { label: "Given name", value: form.givenName },
+          { label: "Date of birth", value: form.dob },
+          { label: "Intervention", value: form.intervention },
+          { label: "Intervention date", value: form.interventionDate },
+          { label: "Phone number", value: form.phoneNumber },
+          { label: "Outcome", value: form.outcome },
+          { label: "Notes", value: form.notes },
+        ]} />
+
         {/* ── Patient ──────────────────────────────────────── */}
-        <section className="form-section" aria-label="Patient identity">
-          <div className="form-section-title">Patient</div>
-
-          <div className={`form-field${errors.nhi ? " form-field-error" : ""}`}>
-            <label className="form-label form-label-req" htmlFor="fu-nhi">NHI</label>
-            <input id="fu-nhi" className="form-input" type="text"
-              placeholder="e.g. ABC1234"
-              value={form.nhi}
-              disabled={!isNew || isDraft} // locked in edit and draft modes
-              onChange={(e) => set("nhi", e.target.value.toUpperCase())}
-              autoCapitalize="characters" autoCorrect="off" spellCheck={false}
-              style={{ letterSpacing: "0.04em" }}
-            />
-            {!isDraft && isNew && patientStatus === "found" && (
-              <span className="nhi-status nhi-status-found">✓ Existing patient</span>
-            )}
-            {!isDraft && isNew && patientStatus === "new" && (
-              <span className="nhi-status nhi-status-new">New patient — enter name below</span>
-            )}
-            {errors.nhi && <span className="form-error" role="alert">{errors.nhi}</span>}
-          </div>
-
-          {/* Existing patient strip */}
-          {identityReadOnly && (form.surname || form.givenName) && (
-            <div className="patient-info-strip">
-              <span className="patient-info-strip-name">
-                {capitalCase(form.surname)}, {capitalCase(form.givenName)}
-              </span>
-              {form.dob && (
-                <span className="patient-info-strip-sub">
-                  DOB: {form.dob}{age && ` · ${age}`}
-                </span>
-              )}
-            </div>
-          )}
-
-          {/* Editable identity (plain-new, unknown patient) */}
-          {!identityReadOnly && (
-            <>
-              <div className="form-field">
-                <label className="form-label" htmlFor="fu-surname">Surname</label>
-                <input id="fu-surname" className="form-input" type="text"
-                  placeholder="Patient surname" value={form.surname}
-                  onChange={(e) => set("surname", e.target.value)}
-                  onBlur={() => set("surname", capitalCase(form.surname))}
-                  autoCapitalize="words" />
-              </div>
-              <div className="form-field">
-                <label className="form-label" htmlFor="fu-given">Given name</label>
-                <input id="fu-given" className="form-input" type="text"
-                  placeholder="Given name" value={form.givenName}
-                  onChange={(e) => set("givenName", e.target.value)}
-                  onBlur={() => set("givenName", capitalCase(form.givenName))}
-                  autoCapitalize="words" />
-              </div>
-              <div className="form-field">
-                <label className="form-label" htmlFor="fu-dob">Date of birth</label>
-                <input id="fu-dob" className="form-input" type="date"
-                  value={form.dob} onChange={(e) => set("dob", e.target.value)} />
-                {form.dob && age && <span className="form-hint">{age}</span>}
-              </div>
-            </>
-          )}
-        </section>
+        <PatientFields
+          idPrefix="fu"
+          nhi={form.nhi}
+          surname={form.surname}
+          givenName={form.givenName}
+          dob={form.dob}
+          onChange={set}
+          status={patientStatus}
+          savedNhi={existing ? existing.rec.nhi : undefined}
+          nhiError={errors.nhi}
+        />
 
         {/* ── Intervention ─────────────────────────────────── */}
         <section className="form-section" aria-label="Intervention details">
@@ -520,6 +482,10 @@ export function FollowUpDetailScreen({
               <button className="btn btn-danger-soft" onClick={handleArchive}>
                 <Archive size={15} aria-hidden />
                 Archive
+              </button>
+              <button className="btn btn-danger" onClick={() => void handleDelete()}>
+                <Trash2 size={15} aria-hidden />
+                Delete
               </button>
             </div>
           </div>

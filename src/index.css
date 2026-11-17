@@ -187,6 +187,33 @@ body {
   .sync-indicator.visible { animation: none; }
 }
 
+/* A sync failed: amber "Tap to sync" pill in place of the indicator.
+   Same amber family as the .ai-warning panels. */
+.sync-alert-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-right: 4px;
+  padding: 4px 10px;
+  border: 1px solid #F59E0B;
+  border-radius: 999px;
+  background: #FEF3C7;
+  color: #92400E;
+  font-family: var(--font-body);
+  font-size: 0.75rem;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.sync-alert-btn:active   { transform: scale(0.97); }
+.sync-alert-btn:disabled { opacity: 0.6; cursor: default; }
+/* Very narrow phones: icon only, so it never crowds the product name. */
+@media (max-width: 340px) {
+  .sync-alert-btn { padding: 5px 8px; }
+  .sync-alert-btn span { display: none; }
+}
+
 /* ── Settings modal overlay ────────────────────────────────── */
 /* Covers the entire viewport — Brand bar, content and TabBar —
    so Settings feels like a full-screen page rather than a panel

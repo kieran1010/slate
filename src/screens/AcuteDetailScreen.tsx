@@ -7,23 +7,22 @@
 // KEY FLOWS:
 //
 //   Create (id === 'new'):
-//     1. User types NHI. After 400ms idle, we look up the patient.
-//     2. If found → name/DOB shown read-only (can't accidentally
-//        change another patient's identity).
-//     3. If not found → name/DOB editable so the patient record
-//        can be created on first save.
+//     1. User types NHI. After 400ms idle, we look up the patient
+//        (PatientFields / usePatientLookup).
+//     2. If found → their name/DOB fill in (still editable: an edit
+//        corrects that patient on every record with the NHI).
+//     3. If not found → enter name/DOB for the new patient.
 //     4. Save: upserts Patient master (if name was provided) then
 //        creates AcuteRecord.
 //
 //   Edit (id === number):
 //     1. Record + patient loaded from IndexedDB on mount.
-//     2. All fields editable EXCEPT nhi (identity is fixed once
-//        the referral exists — changing NHI mid-referral would
-//        mean swapping to a different patient).
+//     2. All fields editable, NHI included: changing the NHI moves
+//        the referral to that patient (e.g. correcting a mis-read
+//        NHI from AI import).
 //     3. Save: upserts Patient (allows correcting a name typo),
 //        updates AcuteRecord.
-//     4. Extra actions: Archive, Move to Follow-up (wired when
-//        the Follow-up module is built — TODO comment below).
+//     4. Extra actions: Move to Follow-up, Archive, Delete.
 //
 // VALIDATION: lightweight inline rules, no library.
 //   • NHI required
@@ -35,26 +34,29 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
-import { ChevronLeft, Archive, ArrowRight } from "lucide-react";
+import { ChevronLeft, Archive, ArrowRight, Trash2 } from "lucide-react";
 import { db } from "../data/db";
 import {
-  getPatient,
   upsertPatient,
   createAcute,
   updateAcute,
   archiveRecord,
+  deleteRecord,
 } from "../data/repository";
+import { DELETED } from "../data/syncMerge";
 import {
   URGENCIES,
   URGENCY_LABELS,
   RECORD_STATUSES,
   RECORD_STATUS_LABELS,
-  calculateAge,
 } from "../data/models";
 import type { Urgency, RecordStatus } from "../data/models";
 import { AutoTextarea } from "../components/AutoTextarea";
+import { UncertainBanner } from "../components/UncertainBanner";
+import { PatientFields, usePatientLookup } from "../components/PatientFields";
 import type { NavigateFn } from "../types/nav";
-import { capitalCase } from "../utils/format";
+import { deleteConfirmMessage } from "../utils/format";
+import { renewDriveAccessOnTap } from "../utils/driveSync";
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -92,12 +94,6 @@ const DEFAULT_FORM: FormState = {
   notes: "",
 };
 
-// Whether a string looks roughly like an NHI (3 letters + 4 chars
-// is the NZ format, but we're permissive — just needs something).
-function nhiLooksComplete(nhi: string): boolean {
-  return nhi.trim().length >= 3;
-}
-
 // ── Component ─────────────────────────────────────────────────
 
 export function AcuteDetailScreen({
@@ -108,9 +104,6 @@ export function AcuteDetailScreen({
   const isNew = id === "new";
 
   const [form, setForm] = useState<FormState>(DEFAULT_FORM);
-  const [patientStatus, setPatientStatus] = useState<
-    "idle" | "found" | "new"
-  >("idle");
   const [errors, setErrors] = useState<Partial<Record<keyof FormState, string>>>({});
   const [saving, setSaving] = useState(false);
   // Prevents the edit-mode form from being overwritten if the DB
@@ -126,7 +119,7 @@ export function AcuteDetailScreen({
       // which is fine, but batching keeps it to one round-trip.
       db.patients.toArray(),
     ]);
-    if (!rec) return null;
+    if (!rec || rec.archived === DELETED) return null;
     const patient = patients.find((p) => p.nhi === rec.nhi);
     return { rec, patient };
   }, [id, isNew]);
@@ -148,38 +141,14 @@ export function AcuteDetailScreen({
       status: rec.status,
       notes: rec.notes,
     });
-    setPatientStatus(patient ? "found" : "idle");
     setInitialized(true);
   }, [existing, initialized]);
 
-  // ── NHI patient lookup (create mode only) ───────────────────
-  // Debounced: fires 400ms after the user stops typing the NHI.
-  // If the NHI looks complete, we query IndexedDB. We do NOT
-  // do the lookup in edit mode (NHI is locked there).
-  useEffect(() => {
-    if (!isNew) return;
-    const nhi = form.nhi.trim().toUpperCase();
-    if (!nhiLooksComplete(nhi)) {
-      setPatientStatus("idle");
-      return;
-    }
-    const timer = setTimeout(async () => {
-      const p = await getPatient(nhi);
-      if (p) {
-        // Patient already exists: pre-fill identity fields read-only.
-        setForm((f) => ({
-          ...f,
-          surname: p.surname,
-          givenName: p.givenName,
-          dob: p.dob,
-        }));
-        setPatientStatus("found");
-      } else {
-        setPatientStatus("new");
-      }
-    }, 400);
-    return () => clearTimeout(timer);
-  }, [form.nhi, isNew]);
+  // ── NHI patient lookup ───────────────────────────────────────
+  // Changing the NHI to a known patient brings in their details.
+  const patientStatus = usePatientLookup(form.nhi, isNew || initialized, (p) =>
+    setForm((f) => ({ ...f, surname: p.surname, givenName: p.givenName, dob: p.dob }))
+  );
 
   // ── Field change helper ──────────────────────────────────────
   const set = useCallback(
@@ -207,6 +176,7 @@ export function AcuteDetailScreen({
   // ── Save ─────────────────────────────────────────────────────
   async function handleSave() {
     if (!validate()) return;
+    renewDriveAccessOnTap(); // a tap: renew Google Drive access if it has run out
     setSaving(true);
     try {
       const nhi = form.nhi.trim().toUpperCase();
@@ -253,8 +223,23 @@ export function AcuteDetailScreen({
     if (!confirm("Archive this referral? It will be removed from the active list but can be restored.")) {
       return;
     }
+    renewDriveAccessOnTap(); // a tap: renew Google Drive access if it has run out
     await archiveRecord("ACUTE", id as number);
     goBack();
+  }
+
+  // ── Delete ───────────────────────────────────────────────────
+  async function handleDelete() {
+    if (isNew) return;
+    if (!confirm(deleteConfirmMessage("referral"))) return;
+    renewDriveAccessOnTap(); // a tap: renew Google Drive access if it has run out
+    try {
+      await deleteRecord("ACUTE", id as number);
+      goBack();
+    } catch (err) {
+      console.error("Delete failed:", err);
+      alert("Delete failed — please try again.");
+    }
   }
 
   // ── Move to Follow-up ────────────────────────────────────────
@@ -293,15 +278,6 @@ export function AcuteDetailScreen({
     }
   }
 
-  // ── Computed display values ──────────────────────────────────
-  const age = form.dob ? calculateAge(form.dob) : "";
-  const patientKnown = patientStatus === "found" || (!!form.surname && !isNew);
-
-  // In create mode, identity fields are editable unless the NHI
-  // resolved to an existing patient (then they're read-only to
-  // avoid corrupting another patient's record).
-  const identityReadOnly = !isNew || patientStatus === "found";
-
   const title = isNew ? "New referral" : "Acute referral";
 
   // ── Render ───────────────────────────────────────────────────
@@ -333,112 +309,29 @@ export function AcuteDetailScreen({
       {/* ── Form body ──────────────────────────────────────── */}
       <div className="form-body">
 
+        <UncertainBanner fields={[
+          { label: "NHI", value: form.nhi },
+          { label: "Surname", value: form.surname },
+          { label: "Given name", value: form.givenName },
+          { label: "Date of birth", value: form.dob },
+          { label: "Location", value: form.location },
+          { label: "Background", value: form.background },
+          { label: "Task to complete", value: form.taskToComplete },
+          { label: "Notes", value: form.notes },
+        ]} />
+
         {/* ── Patient section ──────────────────────────────── */}
-        <section className="form-section" aria-label="Patient identity">
-          <div className="form-section-title">Patient</div>
-
-          {/* NHI */}
-          <div className={`form-field${errors.nhi ? " form-field-error" : ""}`}>
-            <label className="form-label form-label-req" htmlFor="field-nhi">
-              NHI
-            </label>
-            <input
-              id="field-nhi"
-              className="form-input"
-              type="text"
-              placeholder="e.g. ABC1234"
-              value={form.nhi}
-              disabled={!isNew} // NHI is fixed once the referral exists
-              onChange={(e) => set("nhi", e.target.value.toUpperCase())}
-              autoCapitalize="characters"
-              autoCorrect="off"
-              spellCheck={false}
-              style={{ fontFamily: "var(--font-body)", letterSpacing: "0.04em" }}
-            />
-            {/* Inline NHI status feedback (create mode only) */}
-            {isNew && patientStatus === "found" && (
-              <span className="nhi-status nhi-status-found">
-                ✓ Existing patient
-              </span>
-            )}
-            {isNew && patientStatus === "new" && (
-              <span className="nhi-status nhi-status-new">
-                New patient — enter name below
-              </span>
-            )}
-            {errors.nhi && (
-              <span className="form-error" role="alert">
-                {errors.nhi}
-              </span>
-            )}
-          </div>
-
-          {/* Patient info strip (existing patient, read-only) */}
-          {patientKnown && identityReadOnly && (
-            <div className="patient-info-strip">
-              <span className="patient-info-strip-name">
-                {capitalCase(form.surname)}, {capitalCase(form.givenName)}
-              </span>
-              {form.dob && (
-                <span className="patient-info-strip-sub">
-                  DOB: {form.dob}
-                  {age && ` · ${age}`}
-                </span>
-              )}
-            </div>
-          )}
-
-          {/* Editable identity fields (new patient only) */}
-          {(!identityReadOnly || (isNew && patientStatus === "new")) && (
-            <>
-              <div className="form-field">
-                <label className="form-label" htmlFor="field-surname">
-                  Surname
-                </label>
-                <input
-                  id="field-surname"
-                  className="form-input"
-                  type="text"
-                  placeholder="Patient surname"
-                  value={form.surname}
-                  onChange={(e) => set("surname", e.target.value)}
-                  onBlur={() => set("surname", capitalCase(form.surname))}
-                  autoCapitalize="words"
-                />
-              </div>
-              <div className="form-field">
-                <label className="form-label" htmlFor="field-given">
-                  Given name
-                </label>
-                <input
-                  id="field-given"
-                  className="form-input"
-                  type="text"
-                  placeholder="Given name"
-                  value={form.givenName}
-                  onChange={(e) => set("givenName", e.target.value)}
-                  onBlur={() => set("givenName", capitalCase(form.givenName))}
-                  autoCapitalize="words"
-                />
-              </div>
-              <div className="form-field">
-                <label className="form-label" htmlFor="field-dob">
-                  Date of birth
-                </label>
-                <input
-                  id="field-dob"
-                  className="form-input"
-                  type="date"
-                  value={form.dob}
-                  onChange={(e) => set("dob", e.target.value)}
-                />
-                {form.dob && age && (
-                  <span className="form-hint">{age}</span>
-                )}
-              </div>
-            </>
-          )}
-        </section>
+        <PatientFields
+          idPrefix="field"
+          nhi={form.nhi}
+          surname={form.surname}
+          givenName={form.givenName}
+          dob={form.dob}
+          onChange={set}
+          status={patientStatus}
+          savedNhi={existing ? existing.rec.nhi : undefined}
+          nhiError={errors.nhi}
+        />
 
         {/* ── Referral section ─────────────────────────────── */}
         <section className="form-section" aria-label="Referral details">
@@ -555,20 +448,28 @@ export function AcuteDetailScreen({
         {/* ── Actions (existing records only) ──────────────── */}
         {!isNew && (
           <div className="form-actions">
+            <button
+              className="btn btn-secondary"
+              style={{ width: "100%" }}
+              onClick={handleMoveToFollowUp}
+            >
+              <ArrowRight size={15} aria-hidden />
+              Move to follow-up
+            </button>
             <div className="form-actions-row">
-              <button
-                className="btn btn-secondary"
-                onClick={handleMoveToFollowUp}
-              >
-                <ArrowRight size={15} aria-hidden />
-                Move to follow-up
-              </button>
               <button
                 className="btn btn-danger-soft"
                 onClick={handleArchive}
               >
                 <Archive size={15} aria-hidden />
                 Archive
+              </button>
+              <button
+                className="btn btn-danger"
+                onClick={() => void handleDelete()}
+              >
+                <Trash2 size={15} aria-hidden />
+                Delete
               </button>
             </div>
           </div>

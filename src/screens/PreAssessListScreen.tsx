@@ -5,6 +5,7 @@ import { useState, useMemo } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { Plus, ClipboardList, FileUp, Search, X, CheckSquare, Square } from "lucide-react";
 import { archiveRecords, listActivePreAssess, listPatients } from "../data/repository";
+import { renewDriveAccessOnTap } from "../utils/driveSync";
 import { useConfig } from "../hooks/useConfig";
 import { useBulkSelect } from "../hooks/useBulkSelect";
 import { BulkSelectBar } from "../components/BulkSelectBar";
@@ -56,6 +57,7 @@ export function PreAssessListScreen({ navigate }: PreAssessListScreenProps) {
   }
 
   async function archiveSelected() {
+    renewDriveAccessOnTap(); // a tap: renew Google Drive access if it has run out
     setArchiving(true);
     try {
       await archiveRecords("PRE_ASSESSMENT", bulk.selectedIds);

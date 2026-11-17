@@ -15,7 +15,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
-import { ChevronLeft, Archive, ArrowRight, Clipboard, Check } from "lucide-react";
+import { ChevronLeft, Archive, ArrowRight, Clipboard, Check, Trash2 } from "lucide-react";
 import { db } from "../data/db";
 import {
   getPatient,
@@ -23,19 +23,23 @@ import {
   createPreAssess,
   updatePreAssess,
   archiveRecord,
+  deleteRecord,
 } from "../data/repository";
 import {
   RECORD_STATUSES,
   RECORD_STATUS_LABELS,
-  calculateAge,
 } from "../data/models";
 import type { RecordStatus } from "../data/models";
 import { AutoTextarea } from "../components/AutoTextarea";
+import { UncertainBanner } from "../components/UncertainBanner";
+import { PatientFields, usePatientLookup } from "../components/PatientFields";
+import { DELETED } from "../data/syncMerge";
 import { DateTimeField } from "../components/DateTimeField";
 import { useConfig } from "../hooks/useConfig";
 import { formatPreAssess } from "../utils/export";
 import type { NavigateFn } from "../types/nav";
-import { capitalCase } from "../utils/format";
+import { deleteConfirmMessage } from "../utils/format";
+import { renewDriveAccessOnTap } from "../utils/driveSync";
 
 interface PreAssessDetailScreenProps {
   id: number | "new";
@@ -92,7 +96,6 @@ export function PreAssessDetailScreen({
 
   const config = useConfig();
   const [form, setForm] = useState<FormState>(DEFAULT_FORM);
-  const [patientStatus, setPatientStatus] = useState<"idle" | "found" | "new">("idle");
   const [errors, setErrors] = useState<Partial<Record<keyof FormState, string>>>({});
   const [saving, setSaving] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -102,7 +105,7 @@ export function PreAssessDetailScreen({
   const existing = useLiveQuery(async () => {
     if (isNew) return null;
     const rec = await db.preAssess.get(id as number);
-    if (!rec) return null;
+    if (!rec || rec.archived === DELETED) return null;
     const patient = await getPatient(rec.nhi);
     return { rec, patient };
   }, [id, isNew]);
@@ -132,26 +135,14 @@ export function PreAssessDetailScreen({
       notes: rec.notes,
       status: rec.status,
     });
-    setPatientStatus(patient ? "found" : "idle");
     setInitialized(true);
   }, [existing, initialized]);
 
-  // ── NHI patient lookup (create mode) ────────────────────────
-  useEffect(() => {
-    if (!isNew) return;
-    const nhi = form.nhi.trim().toUpperCase();
-    if (nhi.length < 3) { setPatientStatus("idle"); return; }
-    const timer = setTimeout(async () => {
-      const p = await getPatient(nhi);
-      if (p) {
-        setForm((f) => ({ ...f, surname: p.surname, givenName: p.givenName, dob: p.dob }));
-        setPatientStatus("found");
-      } else {
-        setPatientStatus("new");
-      }
-    }, 400);
-    return () => clearTimeout(timer);
-  }, [form.nhi, isNew]);
+  // ── NHI patient lookup ───────────────────────────────────────
+  // Changing the NHI to a known patient brings in their details.
+  const patientStatus = usePatientLookup(form.nhi, isNew || initialized, (p) =>
+    setForm((f) => ({ ...f, surname: p.surname, givenName: p.givenName, dob: p.dob }))
+  );
 
   const set = useCallback(<K extends keyof FormState>(field: K, value: FormState[K]) => {
     setForm((f) => ({ ...f, [field]: value }));
@@ -207,6 +198,7 @@ export function PreAssessDetailScreen({
   // ── Save ─────────────────────────────────────────────────────
   async function handleSave() {
     if (!validate()) return;
+    renewDriveAccessOnTap(); // a tap: renew Google Drive access if it has run out
     setSaving(true);
     try {
       const nhi = form.nhi.trim().toUpperCase();
@@ -255,8 +247,23 @@ export function PreAssessDetailScreen({
   async function handleArchive() {
     if (isNew) return;
     if (!confirm("Archive this assessment? It can be restored later.")) return;
+    renewDriveAccessOnTap(); // a tap: renew Google Drive access if it has run out
     await archiveRecord("PRE_ASSESSMENT", id as number);
     goBack();
+  }
+
+  // ── Delete ───────────────────────────────────────────────────
+  async function handleDelete() {
+    if (isNew) return;
+    if (!confirm(deleteConfirmMessage("assessment"))) return;
+    renewDriveAccessOnTap(); // a tap: renew Google Drive access if it has run out
+    try {
+      await deleteRecord("PRE_ASSESSMENT", id as number);
+      goBack();
+    } catch (err) {
+      console.error("Delete failed:", err);
+      alert("Delete failed — please try again.");
+    }
   }
 
   // ── Move to Follow-up ────────────────────────────────────────
@@ -286,8 +293,6 @@ export function PreAssessDetailScreen({
       return <div className="loading-screen">Loading…</div>;
   }
 
-  const age = form.dob ? calculateAge(form.dob) : "";
-  const identityReadOnly = !isNew || patientStatus === "found";
 
   // ── Render ───────────────────────────────────────────────────
   return (
@@ -310,71 +315,39 @@ export function PreAssessDetailScreen({
 
       <div className="form-body">
 
+        <UncertainBanner fields={[
+          { label: "NHI", value: form.nhi },
+          { label: "Surname", value: form.surname },
+          { label: "Given name", value: form.givenName },
+          { label: "Date of birth", value: form.dob },
+          { label: "Procedure", value: form.procedure },
+          { label: "Surgeon", value: form.surgeon },
+          { label: "Indication", value: form.indicationForSurgery },
+          { label: "Past medical history", value: form.pastMedicalHistory },
+          { label: "Anaesthetic history", value: form.anaestheticHistory },
+          { label: "Social history", value: form.socialHistory },
+          { label: "Functional status", value: form.functionalStatus },
+          { label: "Investigations", value: form.investigations },
+          { label: "Medications", value: form.medications },
+          { label: "Allergies", value: form.allergies },
+          { label: "Weight", value: form.weight },
+          { label: "Height", value: form.height },
+          { label: "Airway assessment", value: form.airwayAssessment },
+          { label: "Notes", value: form.notes },
+        ]} />
+
         {/* ── Patient ──────────────────────────────────────── */}
-        <section className="form-section" aria-label="Patient identity">
-          <div className="form-section-title">Patient</div>
-
-          <div className={`form-field${errors.nhi ? " form-field-error" : ""}`}>
-            <label className="form-label form-label-req" htmlFor="pa-nhi">NHI</label>
-            <input id="pa-nhi" className="form-input" type="text"
-              placeholder="e.g. ABC1234"
-              value={form.nhi}
-              disabled={!isNew}
-              onChange={(e) => set("nhi", e.target.value.toUpperCase())}
-              autoCapitalize="characters" autoCorrect="off" spellCheck={false}
-              style={{ letterSpacing: "0.04em" }}
-            />
-            {isNew && patientStatus === "found" && (
-              <span className="nhi-status nhi-status-found">✓ Existing patient</span>
-            )}
-            {isNew && patientStatus === "new" && (
-              <span className="nhi-status nhi-status-new">New patient — enter name below</span>
-            )}
-            {errors.nhi && <span className="form-error" role="alert">{errors.nhi}</span>}
-          </div>
-
-          {/* Existing patient strip */}
-          {identityReadOnly && (form.surname || form.givenName) && (
-            <div className="patient-info-strip">
-              <span className="patient-info-strip-name">
-                {capitalCase(form.surname)}, {capitalCase(form.givenName)}
-              </span>
-              {form.dob && (
-                <span className="patient-info-strip-sub">
-                  DOB: {form.dob}{age && ` · ${age}`}
-                </span>
-              )}
-            </div>
-          )}
-
-          {/* Editable identity (new patient) */}
-          {!identityReadOnly && (
-            <>
-              <div className="form-field">
-                <label className="form-label" htmlFor="pa-surname">Surname</label>
-                <input id="pa-surname" className="form-input" type="text"
-                  placeholder="Patient surname" value={form.surname}
-                  onChange={(e) => set("surname", e.target.value)}
-                  onBlur={() => set("surname", capitalCase(form.surname))}
-                  autoCapitalize="words" />
-              </div>
-              <div className="form-field">
-                <label className="form-label" htmlFor="pa-given">Given name</label>
-                <input id="pa-given" className="form-input" type="text"
-                  placeholder="Given name" value={form.givenName}
-                  onChange={(e) => set("givenName", e.target.value)}
-                  onBlur={() => set("givenName", capitalCase(form.givenName))}
-                  autoCapitalize="words" />
-              </div>
-              <div className="form-field">
-                <label className="form-label" htmlFor="pa-dob">Date of birth</label>
-                <input id="pa-dob" className="form-input" type="date"
-                  value={form.dob} onChange={(e) => set("dob", e.target.value)} />
-                {form.dob && age && <span className="form-hint">{age}</span>}
-              </div>
-            </>
-          )}
-        </section>
+        <PatientFields
+          idPrefix="pa"
+          nhi={form.nhi}
+          surname={form.surname}
+          givenName={form.givenName}
+          dob={form.dob}
+          onChange={set}
+          status={patientStatus}
+          savedNhi={existing ? existing.rec.nhi : undefined}
+          nhiError={errors.nhi}
+        />
 
         {/* ── Surgery ──────────────────────────────────────── */}
         <section className="form-section" aria-label="Surgery details">
@@ -557,14 +530,18 @@ export function PreAssessDetailScreen({
                 <><Clipboard size={15} aria-hidden /> Copy pre-assessment summary</>
               )}
             </button>
+            <button className="btn btn-secondary" style={{ width: "100%" }} onClick={handleMoveToFollowUp}>
+              <ArrowRight size={15} aria-hidden />
+              Move to follow-up
+            </button>
             <div className="form-actions-row">
-              <button className="btn btn-secondary" onClick={handleMoveToFollowUp}>
-                <ArrowRight size={15} aria-hidden />
-                Move to follow-up
-              </button>
               <button className="btn btn-danger-soft" onClick={handleArchive}>
                 <Archive size={15} aria-hidden />
                 Archive
+              </button>
+              <button className="btn btn-danger" onClick={() => void handleDelete()}>
+                <Trash2 size={15} aria-hidden />
+                Delete
               </button>
             </div>
           </div>

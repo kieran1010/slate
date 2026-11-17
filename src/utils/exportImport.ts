@@ -33,6 +33,7 @@ import {
   type ImportMode,
 } from "../data/repository";
 import type { StoredAcute, StoredPreAssess, StoredFollowUp } from "../data/db";
+import { DELETED } from "../data/syncMerge";
 import {
   BACKUP_SETTINGS_FIELDS,
   DEFAULT_APP_CONFIG,
@@ -151,11 +152,14 @@ function followUpToCsv(
 export async function buildEncryptedPayload(
   passphrase: string
 ): Promise<string> {
+  // Deleted records go in as their (wiped) markers, so the deletion
+  // reaches every device that syncs or restores from this copy.
+  const all = { includeDeleted: true };
   const [patients, acute, preAssess, followUp, config] = await Promise.all([
     listPatients(),
-    listAllAcute(),
-    listAllPreAssess(),
-    listAllFollowUp(),
+    listAllAcute(all),
+    listAllPreAssess(all),
+    listAllFollowUp(all),
     getConfig(),
   ]);
 
@@ -216,9 +220,10 @@ function validBackupSettings(raw: unknown): Partial<BackupSettings> {
   return out as Partial<BackupSettings>;
 }
 
-function countByLifecycle(records: { archived: 0 | 1 }[]): ModuleImportCounts {
-  const archived = records.filter((r) => r.archived === 1).length;
-  return { total: records.length, active: records.length - archived, archived };
+function countByLifecycle(records: { archived: number }[]): ModuleImportCounts {
+  const kept = records.filter((r) => r.archived !== DELETED);
+  const archived = kept.filter((r) => r.archived === 1).length;
+  return { total: kept.length, active: kept.length - archived, archived };
 }
 
 /**

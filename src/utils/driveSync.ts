@@ -22,10 +22,18 @@
 //     token is already in hand.
 //
 // AUTH:
-//   Automatic syncs ask Google for a token silently (prompt "none") —
-//   no popup, no re-authenticating. If Google won't issue one without
-//   a tap (e.g. access was revoked), the sync stops quietly with state
-//   "needs-reconnect", and the next Sync now tap fixes it.
+//   Automatic syncs ask Google for a token silently (prompt "none").
+//   Tokens last about an hour, and are kept (googleDrive.ts) so that
+//   reopening Slate within that hour syncs without asking Google again.
+//   Google renews one through a small window of its own,
+//   which a browser only lets open from a tap — so a background renewal
+//   is usually blocked (always, in practice, on Android). The sync then
+//   stops with state "needs-reconnect", and the header shows a "Tap to
+//   sync" button (components/Brand.tsx): that tap, or Sync now in
+//   Settings, gets a new token and syncs. Taps that save a change
+//   (Save, Archive, Delete, Restore) also renew an expired token on the
+//   way (renewDriveAccessOnTap), so the button is rarely needed. Failed syncs (state "error")
+//   show the same button. Changes made meanwhile wait, and sync then.
 //
 // PASSPHRASE:
 //   The Drive copy is encrypted with the passphrase saved on this
@@ -47,6 +55,7 @@ import {
   isDriveConfigured,
   getDriveToken,
   peekDriveToken,
+  preloadGoogleSignIn,
   findBackupFile,
   getFileMetadata,
   readBackupFile,
@@ -258,14 +267,47 @@ let timer: ReturnType<typeof setTimeout> | null = null;
 let started = false;
 let lastAttemptAt = 0;
 
+// Whether sync and automatic sync are on, as last read from settings.
+// Kept in memory for renewDriveAccessOnTap, which has to ask Google
+// within the tap and can't wait for the database first.
+let autoOn = false;
+
+function autoFromConfig(c: { driveBackupEnabled: boolean; driveAutoSyncEnabled: boolean; encryptionPassphrase: string }): boolean {
+  return c.driveBackupEnabled && c.driveAutoSyncEnabled && !!c.encryptionPassphrase.trim();
+}
+
 async function autoSyncAllowed(): Promise<boolean> {
   if (!isDriveConfigured() || !navigator.onLine) return false;
   try {
-    const c = await getConfig();
-    return c.driveBackupEnabled && c.driveAutoSyncEnabled && !!c.encryptionPassphrase.trim();
+    autoOn = autoFromConfig(await getConfig());
+    return autoOn;
   } catch {
     return false; // no profile yet, or mid-erase
   }
+}
+
+// After a tap renews Google access, sync this soon (the change the tap
+// saved would otherwise wait for the usual 10-second debounce).
+const TAP_SYNC_DELAY_MS = 1500;
+let renewing = false;
+
+/**
+ * Call at the very start of a tap that saves a change — Save, Archive,
+ * Delete, Restore — before any await (a confirm() first is fine). If
+ * automatic sync is on and Google's access has run out, this uses the
+ * tap to renew it: Google only lets its sign-in window open from a tap,
+ * which is why a background renewal fails. It asks silently (prompt
+ * "none"), so Google's window just flashes up and closes; if Google
+ * wants more than that (e.g. a password), it gives up quietly and the
+ * header's "Tap to sync" stays. Does nothing while access is valid.
+ */
+export function renewDriveAccessOnTap(): void {
+  if (!autoOn || renewing || !isDriveConfigured() || !navigator.onLine || peekDriveToken()) return;
+  renewing = true;
+  getDriveToken({ interactive: false, timeoutMs: SILENT_TOKEN_TIMEOUT_MS })
+    .then(() => { schedule(TAP_SYNC_DELAY_MS); })
+    .catch(() => { /* see above: the header's Tap to sync remains */ })
+    .finally(() => { renewing = false; });
 }
 
 function schedule(delay: number): void {
@@ -289,9 +331,10 @@ function onLocalChange(): void {
   // step outside it before looking anything up.
   void Dexie.ignoreTransaction(() => autoSyncAllowed()).then((ok) => {
     if (!ok) return;
-    if (status.state !== "syncing" && status.state !== "wrong-passphrase") {
-      setStatus({ state: "pending", message: status.state === "needs-reconnect" ? status.message : "" });
-    }
+    // Only a healthy state becomes "pending". A failure stays on show
+    // (in Settings and the header) until a sync actually succeeds:
+    // "Changes will sync shortly" would be untrue while Google needs a tap.
+    if (status.state === "idle" || status.state === "synced") setStatus({ state: "pending" });
     schedule(DEBOUNCE_MS);
   });
 }
@@ -332,6 +375,9 @@ export function startDriveSync(): void {
     .then((c) => {
       if (c.driveLastSyncedAt) setStatus({ state: status.state, lastSyncedAt: c.driveLastSyncedAt });
       if (!c.driveBackupEnabled) setStatus({ state: "off" });
+      autoOn = autoFromConfig(c);
+      // Have Google's script ready for renewDriveAccessOnTap.
+      if (autoOn && isDriveConfigured()) preloadGoogleSignIn();
     })
     .catch(console.error);
 
@@ -342,6 +388,7 @@ export function startDriveSync(): void {
 /** Call when sync or its automatic option is switched on or off. */
 export function driveSyncSettingsChanged(enabled: boolean, auto: boolean): void {
   if (timer) { clearTimeout(timer); timer = null; }
+  autoOn = enabled && auto;
   if (!enabled) { dirty = false; setStatus({ state: "off" }); return; }
   if (status.state === "off") setStatus({ state: "idle" });
   // Switching automatic sync back on catches up on anything edited
@@ -352,6 +399,7 @@ export function driveSyncSettingsChanged(enabled: boolean, auto: boolean): void 
 /** Call after this device's data has been erased. */
 export function resetDriveSync(): void {
   if (timer) { clearTimeout(timer); timer = null; }
+  autoOn = false;
   dirty = false;
   setStatus({ state: "off", lastSyncedAt: null });
 }

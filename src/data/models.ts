@@ -172,9 +172,14 @@ export interface AcuteRecord {
   //   and "restore" is simply setting it back to 0. It's a number,
   //   not a boolean, because IndexedDB cannot index boolean values;
   //   0/1 lets us query active vs archived efficiently.
-  // archivedAt: "" while active; ISO timestamp when archived
-  //   (used to order the archive view by most-recently-archived).
-  archived: 0 | 1;
+  //   2 = DELETED (the Delete button): the record's clinical text is
+  //   wiped and it is hidden everywhere, but the row stays behind as
+  //   a marker so Drive sync deletes it on every device instead of
+  //   bringing it back (see syncMerge.ts). Queries for 0 or 1 never
+  //   see it, so lists and the archive view need no extra filtering.
+  // archivedAt: "" while active; ISO timestamp when archived (or
+  //   deleted) — used to order the archive view by most-recently-archived.
+  archived: 0 | 1 | 2;
   archivedAt: string;
   createdAt: string; // see DATE CONVENTION note at top of file
   updatedAt: string;
@@ -204,7 +209,7 @@ export interface PreAssessRecord {
   airwayAssessment: string; // Mallampati, mouth opening etc.
   notes: string;
   status: RecordStatus;
-  archived: 0 | 1; // see lifecycle note on AcuteRecord above
+  archived: 0 | 1 | 2; // see lifecycle note on AcuteRecord above
   archivedAt: string; // "" while active; ISO timestamp when archived
   createdAt: string;
   updatedAt: string;
@@ -227,7 +232,7 @@ export interface FollowUpRecord {
   phoneNumber: string; // for calling the patient
   notes: string;
   status: RecordStatus;
-  archived: 0 | 1; // see lifecycle note on AcuteRecord above
+  archived: 0 | 1 | 2; // see lifecycle note on AcuteRecord above
   archivedAt: string; // "" while active; ISO timestamp when archived
   createdAt: string;
   updatedAt: string;
