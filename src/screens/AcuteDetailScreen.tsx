@@ -56,6 +56,7 @@ import { UncertainBanner } from "../components/UncertainBanner";
 import { PatientFields, usePatientLookup } from "../components/PatientFields";
 import type { NavigateFn } from "../types/nav";
 import { deleteConfirmMessage } from "../utils/format";
+import { renewDriveAccessOnTap } from "../utils/driveSync";
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -175,6 +176,7 @@ export function AcuteDetailScreen({
   // ── Save ─────────────────────────────────────────────────────
   async function handleSave() {
     if (!validate()) return;
+    renewDriveAccessOnTap(); // a tap: renew Google Drive access if it has run out
     setSaving(true);
     try {
       const nhi = form.nhi.trim().toUpperCase();
@@ -221,6 +223,7 @@ export function AcuteDetailScreen({
     if (!confirm("Archive this referral? It will be removed from the active list but can be restored.")) {
       return;
     }
+    renewDriveAccessOnTap(); // a tap: renew Google Drive access if it has run out
     await archiveRecord("ACUTE", id as number);
     goBack();
   }
@@ -229,6 +232,7 @@ export function AcuteDetailScreen({
   async function handleDelete() {
     if (isNew) return;
     if (!confirm(deleteConfirmMessage("referral"))) return;
+    renewDriveAccessOnTap(); // a tap: renew Google Drive access if it has run out
     try {
       await deleteRecord("ACUTE", id as number);
       goBack();

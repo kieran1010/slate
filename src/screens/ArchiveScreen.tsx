@@ -32,6 +32,7 @@
 
 import { useState, useMemo } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
+import { renewDriveAccessOnTap } from "../utils/driveSync";
 import { Search, X, Archive, ArrowDown, ArrowUp } from "lucide-react";
 import {
   listArchived,
@@ -177,6 +178,7 @@ export function ArchiveScreen() {
     )
       return;
 
+    renewDriveAccessOnTap(); // a tap: renew Google Drive access if it has run out
     await restoreRecord(item.module, item.record.id!);
     // useLiveQuery re-runs automatically — no manual refresh needed.
   }

@@ -39,6 +39,7 @@ import { useConfig } from "../hooks/useConfig";
 import { formatPreAssess } from "../utils/export";
 import type { NavigateFn } from "../types/nav";
 import { deleteConfirmMessage } from "../utils/format";
+import { renewDriveAccessOnTap } from "../utils/driveSync";
 
 interface PreAssessDetailScreenProps {
   id: number | "new";
@@ -197,6 +198,7 @@ export function PreAssessDetailScreen({
   // ── Save ─────────────────────────────────────────────────────
   async function handleSave() {
     if (!validate()) return;
+    renewDriveAccessOnTap(); // a tap: renew Google Drive access if it has run out
     setSaving(true);
     try {
       const nhi = form.nhi.trim().toUpperCase();
@@ -245,6 +247,7 @@ export function PreAssessDetailScreen({
   async function handleArchive() {
     if (isNew) return;
     if (!confirm("Archive this assessment? It can be restored later.")) return;
+    renewDriveAccessOnTap(); // a tap: renew Google Drive access if it has run out
     await archiveRecord("PRE_ASSESSMENT", id as number);
     goBack();
   }
@@ -253,6 +256,7 @@ export function PreAssessDetailScreen({
   async function handleDelete() {
     if (isNew) return;
     if (!confirm(deleteConfirmMessage("assessment"))) return;
+    renewDriveAccessOnTap(); // a tap: renew Google Drive access if it has run out
     try {
       await deleteRecord("PRE_ASSESSMENT", id as number);
       goBack();

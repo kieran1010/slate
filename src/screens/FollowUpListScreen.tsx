@@ -5,6 +5,7 @@ import { useState, useMemo } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { Plus, Bell, Phone, FileUp, Search, X, CheckSquare, Square } from "lucide-react";
 import { archiveRecords, listActiveFollowUp, listPatients } from "../data/repository";
+import { renewDriveAccessOnTap } from "../utils/driveSync";
 import { useConfig } from "../hooks/useConfig";
 import { useBulkSelect } from "../hooks/useBulkSelect";
 import { BulkSelectBar } from "../components/BulkSelectBar";
@@ -55,6 +56,7 @@ export function FollowUpListScreen({ navigate }: FollowUpListScreenProps) {
   }
 
   async function archiveSelected() {
+    renewDriveAccessOnTap(); // a tap: renew Google Drive access if it has run out
     setArchiving(true);
     try {
       await archiveRecords("FOLLOW_UP", bulk.selectedIds);

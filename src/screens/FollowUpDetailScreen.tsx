@@ -61,6 +61,7 @@ import { DELETED } from "../data/syncMerge";
 import { DateTimeField } from "../components/DateTimeField";
 import type { NavigateFn } from "../types/nav";
 import { deleteConfirmMessage } from "../utils/format";
+import { renewDriveAccessOnTap } from "../utils/driveSync";
 
 interface FollowUpDetailScreenProps {
   id: number | "new";
@@ -216,6 +217,7 @@ export function FollowUpDetailScreen({
   // ── Save ─────────────────────────────────────────────────────
   async function handleSave() {
     if (!validate()) return;
+    renewDriveAccessOnTap(); // a tap: renew Google Drive access if it has run out
     setSaving(true);
     try {
       const nhi = form.nhi.trim().toUpperCase();
@@ -276,6 +278,7 @@ export function FollowUpDetailScreen({
   async function handleArchive() {
     if (isNew) return;
     if (!confirm("Archive this follow-up? It can be restored later.")) return;
+    renewDriveAccessOnTap(); // a tap: renew Google Drive access if it has run out
     await archiveRecord("FOLLOW_UP", id as number);
     goBack();
   }
@@ -284,6 +287,7 @@ export function FollowUpDetailScreen({
   async function handleDelete() {
     if (isNew) return;
     if (!confirm(deleteConfirmMessage("follow-up"))) return;
+    renewDriveAccessOnTap(); // a tap: renew Google Drive access if it has run out
     try {
       await deleteRecord("FOLLOW_UP", id as number);
       goBack();
