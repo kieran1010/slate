@@ -28,17 +28,17 @@ import {
 import {
   RECORD_STATUSES,
   RECORD_STATUS_LABELS,
-  calculateAge,
 } from "../data/models";
 import type { RecordStatus } from "../data/models";
 import { AutoTextarea } from "../components/AutoTextarea";
 import { UncertainBanner } from "../components/UncertainBanner";
+import { PatientFields, usePatientLookup } from "../components/PatientFields";
 import { DELETED } from "../data/syncMerge";
 import { DateTimeField } from "../components/DateTimeField";
 import { useConfig } from "../hooks/useConfig";
 import { formatPreAssess } from "../utils/export";
 import type { NavigateFn } from "../types/nav";
-import { capitalCase, deleteConfirmMessage } from "../utils/format";
+import { deleteConfirmMessage } from "../utils/format";
 
 interface PreAssessDetailScreenProps {
   id: number | "new";
@@ -95,7 +95,6 @@ export function PreAssessDetailScreen({
 
   const config = useConfig();
   const [form, setForm] = useState<FormState>(DEFAULT_FORM);
-  const [patientStatus, setPatientStatus] = useState<"idle" | "found" | "new">("idle");
   const [errors, setErrors] = useState<Partial<Record<keyof FormState, string>>>({});
   const [saving, setSaving] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -135,26 +134,14 @@ export function PreAssessDetailScreen({
       notes: rec.notes,
       status: rec.status,
     });
-    setPatientStatus(patient ? "found" : "idle");
     setInitialized(true);
   }, [existing, initialized]);
 
-  // ── NHI patient lookup (create mode) ────────────────────────
-  useEffect(() => {
-    if (!isNew) return;
-    const nhi = form.nhi.trim().toUpperCase();
-    if (nhi.length < 3) { setPatientStatus("idle"); return; }
-    const timer = setTimeout(async () => {
-      const p = await getPatient(nhi);
-      if (p) {
-        setForm((f) => ({ ...f, surname: p.surname, givenName: p.givenName, dob: p.dob }));
-        setPatientStatus("found");
-      } else {
-        setPatientStatus("new");
-      }
-    }, 400);
-    return () => clearTimeout(timer);
-  }, [form.nhi, isNew]);
+  // ── NHI patient lookup ───────────────────────────────────────
+  // Changing the NHI to a known patient brings in their details.
+  const patientStatus = usePatientLookup(form.nhi, isNew || initialized, (p) =>
+    setForm((f) => ({ ...f, surname: p.surname, givenName: p.givenName, dob: p.dob }))
+  );
 
   const set = useCallback(<K extends keyof FormState>(field: K, value: FormState[K]) => {
     setForm((f) => ({ ...f, [field]: value }));
@@ -302,8 +289,6 @@ export function PreAssessDetailScreen({
       return <div className="loading-screen">Loading…</div>;
   }
 
-  const age = form.dob ? calculateAge(form.dob) : "";
-  const identityReadOnly = !isNew || patientStatus === "found";
 
   // ── Render ───────────────────────────────────────────────────
   return (
@@ -348,70 +333,17 @@ export function PreAssessDetailScreen({
         ]} />
 
         {/* ── Patient ──────────────────────────────────────── */}
-        <section className="form-section" aria-label="Patient identity">
-          <div className="form-section-title">Patient</div>
-
-          <div className={`form-field${errors.nhi ? " form-field-error" : ""}`}>
-            <label className="form-label form-label-req" htmlFor="pa-nhi">NHI</label>
-            <input id="pa-nhi" className="form-input" type="text"
-              placeholder="e.g. ABC1234"
-              value={form.nhi}
-              disabled={!isNew}
-              onChange={(e) => set("nhi", e.target.value.toUpperCase())}
-              autoCapitalize="characters" autoCorrect="off" spellCheck={false}
-              style={{ letterSpacing: "0.04em" }}
-            />
-            {isNew && patientStatus === "found" && (
-              <span className="nhi-status nhi-status-found">✓ Existing patient</span>
-            )}
-            {isNew && patientStatus === "new" && (
-              <span className="nhi-status nhi-status-new">New patient — enter name below</span>
-            )}
-            {errors.nhi && <span className="form-error" role="alert">{errors.nhi}</span>}
-          </div>
-
-          {/* Existing patient strip */}
-          {identityReadOnly && (form.surname || form.givenName) && (
-            <div className="patient-info-strip">
-              <span className="patient-info-strip-name">
-                {capitalCase(form.surname)}, {capitalCase(form.givenName)}
-              </span>
-              {form.dob && (
-                <span className="patient-info-strip-sub">
-                  DOB: {form.dob}{age && ` · ${age}`}
-                </span>
-              )}
-            </div>
-          )}
-
-          {/* Editable identity (new patient) */}
-          {!identityReadOnly && (
-            <>
-              <div className="form-field">
-                <label className="form-label" htmlFor="pa-surname">Surname</label>
-                <input id="pa-surname" className="form-input" type="text"
-                  placeholder="Patient surname" value={form.surname}
-                  onChange={(e) => set("surname", e.target.value)}
-                  onBlur={() => set("surname", capitalCase(form.surname))}
-                  autoCapitalize="words" />
-              </div>
-              <div className="form-field">
-                <label className="form-label" htmlFor="pa-given">Given name</label>
-                <input id="pa-given" className="form-input" type="text"
-                  placeholder="Given name" value={form.givenName}
-                  onChange={(e) => set("givenName", e.target.value)}
-                  onBlur={() => set("givenName", capitalCase(form.givenName))}
-                  autoCapitalize="words" />
-              </div>
-              <div className="form-field">
-                <label className="form-label" htmlFor="pa-dob">Date of birth</label>
-                <input id="pa-dob" className="form-input" type="date"
-                  value={form.dob} onChange={(e) => set("dob", e.target.value)} />
-                {form.dob && age && <span className="form-hint">{age}</span>}
-              </div>
-            </>
-          )}
-        </section>
+        <PatientFields
+          idPrefix="pa"
+          nhi={form.nhi}
+          surname={form.surname}
+          givenName={form.givenName}
+          dob={form.dob}
+          onChange={set}
+          status={patientStatus}
+          savedNhi={existing ? existing.rec.nhi : undefined}
+          nhiError={errors.nhi}
+        />
 
         {/* ── Surgery ──────────────────────────────────────── */}
         <section className="form-section" aria-label="Surgery details">

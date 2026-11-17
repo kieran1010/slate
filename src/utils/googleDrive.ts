@@ -29,8 +29,12 @@
 //   The plaintext never reaches Google.
 //
 // TOKEN:
-//   Kept in memory only (never written to storage) and revoked
-//   on disconnect / sign-out. Tokens last about an hour.
+//   Tokens last about an hour. The current one is kept in memory and
+//   in localStorage until it expires, so reopening Slate within the
+//   hour (Android often closes a PWA in the background) can sync
+//   straight away without asking Google again. It can only reach the
+//   files Slate created (drive.file). Forgotten when Google rejects
+//   it, and revoked on disconnect / erase.
 //
 // FILE LOCATION:
 //   src/utils/googleDrive.ts
@@ -114,12 +118,49 @@ export function preloadGoogleSignIn(): void {
 
 // ── Token ─────────────────────────────────────────────────────
 
+const TOKEN_STORAGE_KEY = "slateDriveToken";
+
 let cachedToken: string | null = null;
 let cachedExpiry = 0;
+
+// Picks up a token saved before Slate was last closed, if it hasn't
+// expired. Storage can be unavailable (private mode, blocked site
+// data): the token is then simply in memory only.
+function restoreToken(): void {
+  try {
+    const raw = localStorage.getItem(TOKEN_STORAGE_KEY);
+    if (!raw) return;
+    const saved = JSON.parse(raw) as { token?: unknown; expiry?: unknown };
+    if (typeof saved.token === "string" && typeof saved.expiry === "number" && Date.now() < saved.expiry) {
+      cachedToken = saved.token;
+      cachedExpiry = saved.expiry;
+    } else {
+      localStorage.removeItem(TOKEN_STORAGE_KEY);
+    }
+  } catch {
+    // Unreadable: ignore.
+  }
+}
+restoreToken();
+
+function rememberToken(token: string, expiry: number): void {
+  cachedToken = token;
+  cachedExpiry = expiry;
+  try {
+    localStorage.setItem(TOKEN_STORAGE_KEY, JSON.stringify({ token, expiry }));
+  } catch {
+    // Storage unavailable: keep it in memory only.
+  }
+}
 
 function forgetToken(): void {
   cachedToken = null;
   cachedExpiry = 0;
+  try {
+    localStorage.removeItem(TOKEN_STORAGE_KEY);
+  } catch {
+    // Nothing stored.
+  }
 }
 
 /** The cached token if it is still valid, else null. Never shows a popup. */
@@ -164,10 +205,12 @@ export async function getDriveToken({ interactive = true, timeoutMs }: TokenOpti
             reject(new Error(response.error_description || response.error || "Google authorisation failed."));
             return;
           }
-          cachedToken = response.access_token;
           // Expire a minute early so a request never starts on a dying token.
-          cachedExpiry = Date.now() + (Number(response.expires_in) || 3600) * 1000 - 60_000;
-          resolve(cachedToken);
+          rememberToken(
+            response.access_token,
+            Date.now() + (Number(response.expires_in) || 3600) * 1000 - 60_000
+          );
+          resolve(response.access_token);
         },
         error_callback: (error) =>
           reject(new Error(error.type === "popup_closed"

@@ -23,8 +23,9 @@
 //
 // AUTH:
 //   Automatic syncs ask Google for a token silently (prompt "none").
-//   Tokens live in memory for about an hour, and are lost whenever the
-//   app is closed. Google renews one through a small window of its own,
+//   Tokens last about an hour, and are kept (googleDrive.ts) so that
+//   reopening Slate within that hour syncs without asking Google again.
+//   Google renews one through a small window of its own,
 //   which a browser only lets open from a tap — so a background renewal
 //   is usually blocked (always, in practice, on Android). The sync then
 //   stops with state "needs-reconnect", and the header shows a "Tap to

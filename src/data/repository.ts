@@ -74,12 +74,13 @@ export type NewAcute = Omit<AcuteRecord, Managed>;
 export type NewPreAssess = Omit<PreAssessRecord, Managed>;
 export type NewFollowUp = Omit<FollowUpRecord, Managed>;
 
-// What a screen passes to UPDATE a record: any editable field
-// (not the managed ones, and not nhi — identity is fixed at
-// creation). All optional; updatedAt is bumped automatically.
-export type AcuteChanges = Partial<Omit<AcuteRecord, Managed | "nhi">>;
-export type PreAssessChanges = Partial<Omit<PreAssessRecord, Managed | "nhi">>;
-export type FollowUpChanges = Partial<Omit<FollowUpRecord, Managed | "nhi">>;
+// What a screen passes to UPDATE a record: any editable field (not
+// the managed ones). Changing nhi moves the record to another patient,
+// e.g. to correct a mistyped or mis-read NHI. All optional; updatedAt
+// is bumped automatically.
+export type AcuteChanges = Partial<Omit<AcuteRecord, Managed>>;
+export type PreAssessChanges = Partial<Omit<PreAssessRecord, Managed>>;
+export type FollowUpChanges = Partial<Omit<FollowUpRecord, Managed>>;
 
 // A uniform wrapper for the archive view, which mixes records from
 // all three modules. A tagged union so the UI can switch on

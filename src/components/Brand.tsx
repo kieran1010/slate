@@ -32,7 +32,7 @@ export function Brand({ appName, onSettingsOpen }: BrandProps) {
   const syncing = syncState === "syncing";
 
   // When a sync has failed, the cue turns into a "Tap to sync" button.
-  // The usual cause: Google's sign-in token (held in memory for about an
+  // The usual cause: Google's sign-in token (it lasts about an
   // hour) has run out, and a browser won't let a background timer open
   // Google's sign-in window, so automatic sync can't renew it. A tap
   // can, so one tap here shows Google's window and syncs.
