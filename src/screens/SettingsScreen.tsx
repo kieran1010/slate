@@ -48,7 +48,9 @@ import {
   isDriveConfigured,
   preloadGoogleSignIn,
   getDriveToken,
-  revokeDriveToken,
+  disconnectDrive,
+  beginBackgroundSyncSetup,
+  stopBackgroundSync,
   findBackupFile,
   getFileMetadata,
   deleteBackupFile,
@@ -62,6 +64,7 @@ import {
   type DriveSyncStatus,
   type SyncResult,
 } from "../utils/driveSync";
+import { getDeviceLink, subscribeDeviceLink, peekLinkOutcome, clearLinkOutcome } from "../utils/driveLink";
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -221,9 +224,16 @@ export function SettingsScreen({ onClose, onDataErased }: SettingsScreenProps) {
   // ── Drive sync state ───────────────────────────────────────
   const [showDriveWarning, setShowDriveWarning] = useState(false);
   const [driveBusy, setDriveBusy] = useState(false);
-  const [driveResult, setDriveResult] = useState<{ ok: boolean; message: string } | null>(null);
+  // Starts with the outcome of a background-sync setup that has just come
+  // back from Google, if any (Settings opens itself for it — see App.tsx).
+  const [driveResult, setDriveResult] = useState<{ ok: boolean; message: string } | null>(() => peekLinkOutcome());
   const [confirmReplaceDrive, setConfirmReplaceDrive] = useState(false);
   const syncStatus = useSyncExternalStore(subscribeDriveSync, getDriveSyncStatus);
+  // Background sync: this device is connected to the Hypnos sign-in server.
+  const backgroundOn = useSyncExternalStore(subscribeDeviceLink, () => !!getDeviceLink());
+  const [showBackgroundInfo, setShowBackgroundInfo] = useState(false);
+  // The setup outcome has been shown once Settings closes.
+  useEffect(() => () => clearLinkOutcome(), []);
   // Undefined while loading; false on a fresh or erased device.
   const hasLocalData = useLiveQuery(() => hasAnyLocalData(), []);
 
@@ -348,7 +358,7 @@ export function SettingsScreen({ onClose, onDataErased }: SettingsScreenProps) {
     }
     try {
       erasingRef.current = true;
-      await revokeDriveToken();
+      await disconnectDrive();
       await clearAllLocalData();
       onDataErased?.();
     } catch (err) {
@@ -423,10 +433,31 @@ export function SettingsScreen({ onClose, onDataErased }: SettingsScreenProps) {
       await saveConfig({ driveBackupEnabled: false, driveFileId: "" });
       driveSyncSettingsChanged(false, false);
       setConfirmReplaceDrive(false);
-      await revokeDriveToken();
+      await disconnectDrive();
     } catch (err) {
       console.error("Drive toggle save failed:", err);
       alert("Couldn't save the Google Drive setting — please try again.");
+    }
+  }
+
+  // ── Background sync ────────────────────────────────────────
+  function handleBackgroundToggle() {
+    setDriveResult(null);
+    if (!backgroundOn) { setShowBackgroundInfo(true); return; }
+    if (!confirm("Turn off background sync on this device? Slate will go back to needing Google's sign-in pop-up now and then.")) return;
+    void stopBackgroundSync();
+  }
+
+  async function startBackgroundSync() {
+    setDriveBusy(true);
+    try {
+      // Slate leaves for Google's consent screen and reloads when it comes
+      // back, so save anything waiting first.
+      await flushSave(true);
+      await beginBackgroundSyncSetup();
+    } catch (err) {
+      setDriveResult({ ok: false, message: err instanceof Error ? err.message : "Couldn't start background sync." });
+      setDriveBusy(false);
     }
   }
 
@@ -606,6 +637,43 @@ export function SettingsScreen({ onClose, onDataErased }: SettingsScreenProps) {
                   <span className="toggle-thumb" />
                 </button>
               </div>
+
+              <div className="toggle-row" style={{ marginTop: "0.75rem" }}>
+                <span className="toggle-label">
+                  Background sync
+                  <span className="toggle-label-sub">
+                    {backgroundOn
+                      ? "On for this device: syncs without Google's sign-in pop-up"
+                      : "Sync without Google's sign-in pop-up on this device"}
+                  </span>
+                </span>
+                <button className="toggle-track" role="switch" aria-checked={backgroundOn}
+                  aria-label="Background sync" onClick={handleBackgroundToggle} disabled={driveBusy}>
+                  <span className="toggle-thumb" />
+                </button>
+              </div>
+
+              {showBackgroundInfo && !backgroundOn && (
+                <div className="ai-warning" role="alert" aria-live="polite" style={{ marginTop: "0.75rem" }}>
+                  <p className="ai-warning-title"><AlertTriangle size={16} aria-hidden /> Background sync</p>
+                  <p>
+                    Google will ask once more for access to Slate's own files in your Drive. Your
+                    permission is then kept, locked, by the Hypnos sign-in server, so Slate can renew its
+                    access without Google's pop-up. It can only be unlocked with a key that stays on this
+                    device.
+                  </p>
+                  <p>
+                    Your records never pass through the server: they are encrypted on this device with
+                    your passphrase before they reach Google Drive, as now. Turn this off at any time.
+                  </p>
+                  <div className="ai-warning-actions">
+                    <button className="btn btn-secondary" onClick={() => setShowBackgroundInfo(false)}>Cancel</button>
+                    <button className="btn btn-primary" onClick={() => void startBackgroundSync()} disabled={driveBusy}>
+                      <Check size={14} aria-hidden /> Continue to Google
+                    </button>
+                  </div>
+                </div>
+              )}
 
               <div className="data-action-buttons" style={{ marginTop: "0.75rem" }}>
                 <button className="btn btn-primary data-btn" onClick={() => void runSync()}

@@ -38,6 +38,7 @@ import { ensureActiveProfile } from "./data/profiles";
 import { getConfig } from "./data/repository";
 import { DriveStalePrompt } from "./components/DriveStalePrompt";
 import { startDriveSync, resetDriveSync } from "./utils/driveSync";
+import { finishBackgroundSyncSetup } from "./utils/googleDrive";
 import type { Profile } from "./data/db";
 import type { NavState, Tab, NavigateFn } from "./types/nav";
 
@@ -73,12 +74,7 @@ function LocalDataBanner({ onDismiss }: { onDismiss: () => void }) {
 export default function App() {
   // ── Profile gate ───────────────────────────────────────────
   const [profile, setProfile] = useState<Profile | null>(null);
-
-  useEffect(() => {
-    ensureActiveProfile()
-      .then((p) => { startDriveSync(); setProfile(p); })
-      .catch(console.error);
-  }, []);
+  // (Started below, once openSettings exists.)
 
   // ── Navigation state ───────────────────────────────────────
   const [nav, setNav] = useState<NavState>({ tab: "pre-assess", view: "list" });
@@ -246,6 +242,23 @@ export default function App() {
     setSettingsOpen(true);
     window.history.pushState({ slateNav: true, settings: true }, "");
   }, []);
+
+  // ── Startup: profile, background-sync setup, Drive sync ────
+  // A launch can be Google returning from background-sync setup: finish
+  // that first, so the launch sync already uses the new connection, and
+  // open Settings to show how it went. (openSettings is stable, so this
+  // runs once.)
+  useEffect(() => {
+    const setupDone = finishBackgroundSyncSetup().catch(() => false);
+    ensureActiveProfile()
+      .then(async (p) => {
+        const returnedFromGoogle = await setupDone;
+        startDriveSync();
+        setProfile(p);
+        if (returnedFromGoogle) openSettings();
+      })
+      .catch(console.error);
+  }, [openSettings]);
 
   // Closing Settings from within the app (the ✕ button, or after an
   // erase) pops the entry we pushed on open so
