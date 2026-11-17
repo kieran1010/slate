@@ -55,8 +55,9 @@ import {
 import type { FollowUpType, RecordStatus } from "../data/models";
 import { dateAddHours } from "../data/dates";
 import { AutoTextarea } from "../components/AutoTextarea";
-import { UncertainBanner } from "../components/UncertainBanner";
-import { PatientFields, usePatientLookup } from "../components/PatientFields";
+import { TagInput } from "../components/UncertainHighlight";
+import { PatientFields } from "../components/PatientFields";
+import { usePatientLookup } from "../hooks/usePatientLookup";
 import { DELETED } from "../data/syncMerge";
 import { DateTimeField } from "../components/DateTimeField";
 import type { NavigateFn } from "../types/nav";
@@ -355,18 +356,6 @@ export function FollowUpDetailScreen({
 
       <div className="form-body">
 
-        <UncertainBanner fields={[
-          { label: "NHI", value: form.nhi },
-          { label: "Surname", value: form.surname },
-          { label: "Given name", value: form.givenName },
-          { label: "Date of birth", value: form.dob },
-          { label: "Intervention", value: form.intervention },
-          { label: "Intervention date", value: form.interventionDate },
-          { label: "Phone number", value: form.phoneNumber },
-          { label: "Outcome", value: form.outcome },
-          { label: "Notes", value: form.notes },
-        ]} />
-
         {/* ── Patient ──────────────────────────────────────── */}
         <PatientFields
           idPrefix="fu"
@@ -388,7 +377,7 @@ export function FollowUpDetailScreen({
             <label className="form-label form-label-req" htmlFor="fu-intervention">
               Intervention
             </label>
-            <input id="fu-intervention" className="form-input" type="text"
+            <TagInput id="fu-intervention" className="form-input" type="text"
               placeholder="What was done, e.g. ISB nerve block"
               value={form.intervention}
               onChange={(e) => set("intervention", e.target.value)} />
@@ -408,7 +397,7 @@ export function FollowUpDetailScreen({
 
           <div className="form-field">
             <label className="form-label" htmlFor="fu-phone">Phone number</label>
-            <input id="fu-phone" className="form-input" type="tel"
+            <TagInput id="fu-phone" className="form-input" type="tel"
               placeholder="For calling the patient"
               value={form.phoneNumber}
               onChange={(e) => set("phoneNumber", e.target.value)} />

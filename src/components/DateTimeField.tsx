@@ -12,11 +12,19 @@
 // valid "YYYY-MM-DDThh:mm" string the moment a date is chosen, which
 // other logic (e.g. the follow-up OFFSET calculation) can rely on.
 //
+// A value that isn't a date (e.g. an AI import's "[UNCERTAIN] ..."
+// value) can't be shown by the date picker, which would look blank.
+// It is shown as text instead, with the tag in red, and the pickers
+// come back once it has been corrected to a date (or cleared).
+//
 // FILE LOCATION:
 //   src/components/DateTimeField.tsx
 // ============================================================
 
+import { TagInput } from "./UncertainHighlight";
+
 const DEFAULT_TIME = "08:00";
+const STORAGE_FORMAT = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2})?$/;
 
 interface DateTimeFieldProps {
   id: string;
@@ -26,6 +34,18 @@ interface DateTimeFieldProps {
 }
 
 export function DateTimeField({ id, value, onChange }: DateTimeFieldProps) {
+  if (value && !STORAGE_FORMAT.test(value)) {
+    return (
+      <TagInput
+        id={id}
+        className="form-input"
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    );
+  }
+
   const [datePart, timePart] = value ? value.split("T") : ["", ""];
 
   function handleDateChange(newDate: string) {

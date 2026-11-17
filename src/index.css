@@ -561,6 +561,31 @@ body {
 .form-input::placeholder,
 .form-textarea::placeholder { color: var(--dim); }
 
+/* AI import's [UNCERTAIN] tag, shown in red inside a field
+   (components/UncertainHighlight.tsx). A copy of the text sits behind
+   the field with the tag coloured; the field's own text is made
+   transparent while a tag is present. Only colour may differ between
+   the two — anything that changes letter widths would misalign them. */
+.uncertain-field { position: relative; }
+.uncertain-backdrop {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  white-space: pre;
+}
+.uncertain-backdrop-multi {
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+.uncertain-field-input {
+  position: relative;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  caret-color: var(--text);
+}
+.uncertain-tag { color: #C0392B; }
+
 /* Custom chevron for native <select> */
 .form-select {
   cursor: pointer;

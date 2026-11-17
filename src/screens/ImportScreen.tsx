@@ -16,8 +16,8 @@
 // reviews every field there, corrects uncertainties, and saves.
 //
 // The [UNCERTAIN] prefix is preserved in stored values so it
-// remains visible in the edit form, where UncertainBanner lists the
-// fields that carry it. The user removes it when they're satisfied
+// remains visible in the edit form, where it is shown in red
+// (components/UncertainHighlight.tsx). The user removes it when they're satisfied
 // the value is correct.
 //
 // FILE LOCATION:

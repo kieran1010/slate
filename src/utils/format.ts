@@ -67,9 +67,11 @@ export function deleteConfirmMessage(noun: string): string {
 // "o'brien" → "O'Brien"), and a leading "Mc" capitalises the next
 // letter ("MCDONALD" → "McDonald"). Spacing is left as typed so this
 // can run while someone is still typing; trim separately when saving.
+// AI import's "[UNCERTAIN]" tag is left in capitals.
 export function capitalCase(name: string): string {
   return name
     .toLocaleLowerCase()
     .replace(/(^|[\s\-'’])(\p{L})/gu, (_m, sep: string, ch: string) => sep + ch.toLocaleUpperCase())
-    .replace(/(^|[\s\-'’])Mc(\p{L})/gu, (_m, sep: string, ch: string) => sep + "Mc" + ch.toLocaleUpperCase());
+    .replace(/(^|[\s\-'’])Mc(\p{L})/gu, (_m, sep: string, ch: string) => sep + "Mc" + ch.toLocaleUpperCase())
+    .replace(/\[uncertain\]/gi, "[UNCERTAIN]");
 }

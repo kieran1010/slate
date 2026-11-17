@@ -52,8 +52,9 @@ import {
 } from "../data/models";
 import type { Urgency, RecordStatus } from "../data/models";
 import { AutoTextarea } from "../components/AutoTextarea";
-import { UncertainBanner } from "../components/UncertainBanner";
-import { PatientFields, usePatientLookup } from "../components/PatientFields";
+import { TagInput } from "../components/UncertainHighlight";
+import { PatientFields } from "../components/PatientFields";
+import { usePatientLookup } from "../hooks/usePatientLookup";
 import type { NavigateFn } from "../types/nav";
 import { deleteConfirmMessage } from "../utils/format";
 import { renewDriveAccessOnTap } from "../utils/driveSync";
@@ -309,17 +310,6 @@ export function AcuteDetailScreen({
       {/* ── Form body ──────────────────────────────────────── */}
       <div className="form-body">
 
-        <UncertainBanner fields={[
-          { label: "NHI", value: form.nhi },
-          { label: "Surname", value: form.surname },
-          { label: "Given name", value: form.givenName },
-          { label: "Date of birth", value: form.dob },
-          { label: "Location", value: form.location },
-          { label: "Background", value: form.background },
-          { label: "Task to complete", value: form.taskToComplete },
-          { label: "Notes", value: form.notes },
-        ]} />
-
         {/* ── Patient section ──────────────────────────────── */}
         <PatientFields
           idPrefix="field"
@@ -342,7 +332,7 @@ export function AcuteDetailScreen({
             <label className="form-label" htmlFor="field-location">
               Location
             </label>
-            <input
+            <TagInput
               id="field-location"
               className="form-input"
               type="text"

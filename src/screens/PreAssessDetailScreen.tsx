@@ -31,8 +31,9 @@ import {
 } from "../data/models";
 import type { RecordStatus } from "../data/models";
 import { AutoTextarea } from "../components/AutoTextarea";
-import { UncertainBanner } from "../components/UncertainBanner";
-import { PatientFields, usePatientLookup } from "../components/PatientFields";
+import { TagInput } from "../components/UncertainHighlight";
+import { PatientFields } from "../components/PatientFields";
+import { usePatientLookup } from "../hooks/usePatientLookup";
 import { DELETED } from "../data/syncMerge";
 import { DateTimeField } from "../components/DateTimeField";
 import { useConfig } from "../hooks/useConfig";
@@ -315,27 +316,6 @@ export function PreAssessDetailScreen({
 
       <div className="form-body">
 
-        <UncertainBanner fields={[
-          { label: "NHI", value: form.nhi },
-          { label: "Surname", value: form.surname },
-          { label: "Given name", value: form.givenName },
-          { label: "Date of birth", value: form.dob },
-          { label: "Procedure", value: form.procedure },
-          { label: "Surgeon", value: form.surgeon },
-          { label: "Indication", value: form.indicationForSurgery },
-          { label: "Past medical history", value: form.pastMedicalHistory },
-          { label: "Anaesthetic history", value: form.anaestheticHistory },
-          { label: "Social history", value: form.socialHistory },
-          { label: "Functional status", value: form.functionalStatus },
-          { label: "Investigations", value: form.investigations },
-          { label: "Medications", value: form.medications },
-          { label: "Allergies", value: form.allergies },
-          { label: "Weight", value: form.weight },
-          { label: "Height", value: form.height },
-          { label: "Airway assessment", value: form.airwayAssessment },
-          { label: "Notes", value: form.notes },
-        ]} />
-
         {/* ── Patient ──────────────────────────────────────── */}
         <PatientFields
           idPrefix="pa"
@@ -357,7 +337,7 @@ export function PreAssessDetailScreen({
             <label className="form-label form-label-req" htmlFor="pa-procedure">
               Procedure
             </label>
-            <input id="pa-procedure" className="form-input" type="text"
+            <TagInput id="pa-procedure" className="form-input" type="text"
               placeholder="Planned surgical procedure"
               value={form.procedure}
               onChange={(e) => set("procedure", e.target.value)} />
@@ -377,7 +357,7 @@ export function PreAssessDetailScreen({
 
           <div className="form-field">
             <label className="form-label" htmlFor="pa-surgeon">Surgeon</label>
-            <input id="pa-surgeon" className="form-input" type="text"
+            <TagInput id="pa-surgeon" className="form-input" type="text"
               placeholder="Operating surgeon"
               value={form.surgeon}
               onChange={(e) => set("surgeon", e.target.value)} />
@@ -468,14 +448,14 @@ export function PreAssessDetailScreen({
           <div style={{ display: "flex" }}>
             <div className="form-field" style={{ flex: 1, borderRight: "1px solid var(--border)" }}>
               <label className="form-label" htmlFor="pa-weight">Weight (kg)</label>
-              <input id="pa-weight" className="form-input" type="text"
+              <TagInput id="pa-weight" className="form-input" type="text"
                 inputMode="decimal" placeholder="kg"
                 value={form.weight}
                 onChange={(e) => set("weight", e.target.value)} />
             </div>
             <div className="form-field" style={{ flex: 1 }}>
               <label className="form-label" htmlFor="pa-height">Height (cm)</label>
-              <input id="pa-height" className="form-input" type="text"
+              <TagInput id="pa-height" className="form-input" type="text"
                 inputMode="decimal" placeholder="cm"
                 value={form.height}
                 onChange={(e) => set("height", e.target.value)} />
