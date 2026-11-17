@@ -374,6 +374,29 @@ export function PreAssessDetailScreen({
           </div>
         </section>
 
+        {/* ── Measurements ─────────────────────────────────── */}
+        <section className="form-section" aria-label="Measurements">
+          <div className="form-section-title">Measurements</div>
+
+          {/* Weight and height sit side by side */}
+          <div style={{ display: "flex" }}>
+            <div className="form-field" style={{ flex: 1, borderRight: "1px solid var(--border)" }}>
+              <label className="form-label" htmlFor="pa-weight">Weight (kg)</label>
+              <TagInput id="pa-weight" className="form-input" type="text"
+                inputMode="decimal" placeholder="kg"
+                value={form.weight}
+                onChange={(e) => set("weight", e.target.value)} />
+            </div>
+            <div className="form-field" style={{ flex: 1 }}>
+              <label className="form-label" htmlFor="pa-height">Height (cm)</label>
+              <TagInput id="pa-height" className="form-input" type="text"
+                inputMode="decimal" placeholder="cm"
+                value={form.height}
+                onChange={(e) => set("height", e.target.value)} />
+            </div>
+          </div>
+        </section>
+
         {/* ── History ──────────────────────────────────────── */}
         <section className="form-section" aria-label="Patient history">
           <div className="form-section-title">History</div>
@@ -437,29 +460,6 @@ export function PreAssessDetailScreen({
               placeholder="e.g. NKDA, penicillin, latex"
               value={form.allergies}
               onChange={(e) => set("allergies", e.target.value)} />
-          </div>
-        </section>
-
-        {/* ── Measurements ─────────────────────────────────── */}
-        <section className="form-section" aria-label="Measurements">
-          <div className="form-section-title">Measurements</div>
-
-          {/* Weight and height sit side by side */}
-          <div style={{ display: "flex" }}>
-            <div className="form-field" style={{ flex: 1, borderRight: "1px solid var(--border)" }}>
-              <label className="form-label" htmlFor="pa-weight">Weight (kg)</label>
-              <TagInput id="pa-weight" className="form-input" type="text"
-                inputMode="decimal" placeholder="kg"
-                value={form.weight}
-                onChange={(e) => set("weight", e.target.value)} />
-            </div>
-            <div className="form-field" style={{ flex: 1 }}>
-              <label className="form-label" htmlFor="pa-height">Height (cm)</label>
-              <TagInput id="pa-height" className="form-input" type="text"
-                inputMode="decimal" placeholder="cm"
-                value={form.height}
-                onChange={(e) => set("height", e.target.value)} />
-            </div>
           </div>
         </section>
 
