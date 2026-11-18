@@ -611,13 +611,11 @@ export function SettingsScreen({ onClose, onDataErased }: SettingsScreenProps) {
               <p className="ai-warning-title"><AlertTriangle size={16} aria-hidden /> Privacy notice</p>
               <p>
                 Slate keeps an <strong>encrypted</strong> copy of your records in your Google Drive.
-                It's encrypted on this device with your passphrase, so neither Google nor Hypnos can
-                read it.
+                It's encrypted with your passphrase, so neither Google nor Hypnos can read it.
               </p>
               <p>
-                Google will ask you to let Slate use its own files in your Drive, never the rest of
-                it. A Hypnos server keeps that permission, locked to this device, so Slate can sync
-                without Google's pop-up.
+                Google Drive access gives Slate access only to its own files, never to the rest of
+                your data.
               </p>
               <div className="ai-warning-actions">
                 <button className="btn btn-secondary" onClick={() => setShowDriveWarning(false)}>Cancel</button>
