@@ -50,7 +50,6 @@ import {
   getDriveToken,
   disconnectDrive,
   beginBackgroundSyncSetup,
-  stopBackgroundSync,
   findBackupFile,
   getFileMetadata,
   deleteBackupFile,
@@ -196,6 +195,9 @@ function describeStatus(s: DriveSyncStatus, lastSyncedAt: number | null): string
   }
 }
 
+// Remembers "Not now" on the Finish setup prompt (this device only).
+const FINISH_SETUP_DISMISSED_KEY = "slateDriveFinishSetupDismissed";
+
 // ── Component ─────────────────────────────────────────────────
 
 export function SettingsScreen({ onClose, onDataErased }: SettingsScreenProps) {
@@ -224,15 +226,21 @@ export function SettingsScreen({ onClose, onDataErased }: SettingsScreenProps) {
   // ── Drive sync state ───────────────────────────────────────
   const [showDriveWarning, setShowDriveWarning] = useState(false);
   const [driveBusy, setDriveBusy] = useState(false);
-  // Starts with the outcome of a background-sync setup that has just come
-  // back from Google, if any (Settings opens itself for it — see App.tsx).
-  const [driveResult, setDriveResult] = useState<{ ok: boolean; message: string } | null>(() => peekLinkOutcome());
+  // A connection to the Hypnos sign-in server that has just come back from
+  // Google, if any (Settings opens itself for it — see App.tsx).
+  const [linkOutcome] = useState(() => peekLinkOutcome());
+  const [driveResult, setDriveResult] = useState<{ ok: boolean; message: string } | null>(linkOutcome);
   const [confirmReplaceDrive, setConfirmReplaceDrive] = useState(false);
   const syncStatus = useSyncExternalStore(subscribeDriveSync, getDriveSyncStatus);
-  // Background sync: this device is connected to the Hypnos sign-in server.
-  const backgroundOn = useSyncExternalStore(subscribeDeviceLink, () => !!getDeviceLink());
-  const [showBackgroundInfo, setShowBackgroundInfo] = useState(false);
-  // The setup outcome has been shown once Settings closes.
+  // This device gets its Drive sign-ins from the Hypnos server (no pop-ups).
+  const connected = useSyncExternalStore(subscribeDeviceLink, () => !!getDeviceLink());
+  // Switching sync on through the server didn't work: offer Google's pop-up.
+  const offerPopup = !!linkOutcome && !linkOutcome.ok && !!linkOutcome.enableSync;
+  // "Finish setup" for a device still syncing the old way, until dismissed.
+  const [finishSetupDismissed, setFinishSetupDismissed] = useState(() => {
+    try { return localStorage.getItem(FINISH_SETUP_DISMISSED_KEY) === "1"; } catch { return false; }
+  });
+  // The connection outcome has been shown once Settings closes.
   useEffect(() => () => clearLinkOutcome(), []);
   // Undefined while loading; false on a fresh or erased device.
   const hasLocalData = useLiveQuery(() => hasAnyLocalData(), []);
@@ -272,15 +280,14 @@ export function SettingsScreen({ onClose, onDataErased }: SettingsScreenProps) {
   }, [existingConfig]);
 
   const driveEnabled = existingConfig?.driveBackupEnabled ?? false;
-  const autoOn = existingConfig?.driveAutoSyncEnabled ?? true;
   const lastSyncedAt = syncStatus.lastSyncedAt ?? (existingConfig?.driveLastSyncedAt || null);
 
   // Load Google's sign-in script up front, so the consent popup opens
   // straight from the button tap rather than after a network round-trip
   // (which some browsers treat as no longer user-initiated and block).
   useEffect(() => {
-    if ((driveEnabled || showDriveWarning) && isDriveConfigured()) preloadGoogleSignIn();
-  }, [driveEnabled, showDriveWarning]);
+    if ((driveEnabled || showDriveWarning || offerPopup) && isDriveConfigured()) preloadGoogleSignIn();
+  }, [driveEnabled, showDriveWarning, offerPopup]);
 
   const set = useCallback(
     <K extends keyof FormState>(field: K, value: FormState[K]) => {
@@ -406,8 +413,25 @@ export function SettingsScreen({ onClose, onDataErased }: SettingsScreenProps) {
     setShowDriveWarning(true);
   }
 
+  // Switching sync on connects this device to the Hypnos sign-in server:
+  // Slate leaves for Google's consent screen and comes back, and App.tsx
+  // switches sync on only if that worked. Anything waiting is saved first.
   async function enableDrive() {
     setShowDriveWarning(false);
+    setDriveBusy(true); setDriveResult(null);
+    try {
+      await savePassphraseIfChanged();
+      await flushSave(true);
+      await beginBackgroundSyncSetup({ enableSync: true });
+    } catch (err) {
+      setDriveResult({ ok: false, message: err instanceof Error ? err.message : "Couldn't connect to Google Drive." });
+      setDriveBusy(false);
+    }
+  }
+
+  // The fallback when connecting through the server doesn't work on this
+  // device: Google's own pop-up, as before background sync.
+  async function enableDriveWithPopup() {
     setDriveBusy(true); setDriveResult(null);
     try {
       // Consent first: if the user cancels Google's popup, sync stays off.
@@ -417,7 +441,7 @@ export function SettingsScreen({ onClose, onDataErased }: SettingsScreenProps) {
         driveAutoSyncEnabled: true,
         encryptionPassphrase: form.encryptionPassphrase,
       });
-      driveSyncSettingsChanged(true, false);
+      driveSyncSettingsChanged(true);
     } catch (err) {
       setDriveResult({ ok: false, message: err instanceof Error ? err.message : "Couldn't connect to Google Drive." });
       setDriveBusy(false);
@@ -427,48 +451,34 @@ export function SettingsScreen({ onClose, onDataErased }: SettingsScreenProps) {
     await runSync();
   }
 
+  // A device switched on before background sync: connect it to the server.
+  async function finishSetup() {
+    setDriveBusy(true); setDriveResult(null);
+    try {
+      await savePassphraseIfChanged();
+      await flushSave(true);
+      await beginBackgroundSyncSetup();
+    } catch (err) {
+      setDriveResult({ ok: false, message: err instanceof Error ? err.message : "Couldn't connect to Google Drive." });
+      setDriveBusy(false);
+    }
+  }
+
+  function dismissFinishSetup() {
+    try { localStorage.setItem(FINISH_SETUP_DISMISSED_KEY, "1"); } catch { /* shows again next time */ }
+    setFinishSetupDismissed(true);
+  }
+
   async function disableDrive() {
     if (!confirm("Switch off Google Drive sync? Your data stays on this device and in your Drive.")) return;
     try {
       await saveConfig({ driveBackupEnabled: false, driveFileId: "" });
-      driveSyncSettingsChanged(false, false);
+      driveSyncSettingsChanged(false);
       setConfirmReplaceDrive(false);
       await disconnectDrive();
     } catch (err) {
       console.error("Drive toggle save failed:", err);
       alert("Couldn't save the Google Drive setting — please try again.");
-    }
-  }
-
-  // ── Background sync ────────────────────────────────────────
-  function handleBackgroundToggle() {
-    setDriveResult(null);
-    if (!backgroundOn) { setShowBackgroundInfo(true); return; }
-    if (!confirm("Turn off background sync on this device? Slate will go back to needing Google's sign-in pop-up now and then.")) return;
-    void stopBackgroundSync();
-  }
-
-  async function startBackgroundSync() {
-    setDriveBusy(true);
-    try {
-      // Slate leaves for Google's consent screen and reloads when it comes
-      // back, so save anything waiting first.
-      await flushSave(true);
-      await beginBackgroundSyncSetup();
-    } catch (err) {
-      setDriveResult({ ok: false, message: err instanceof Error ? err.message : "Couldn't start background sync." });
-      setDriveBusy(false);
-    }
-  }
-
-  async function handleAutoSyncToggle() {
-    const next = !autoOn;
-    try {
-      await saveConfig({ driveAutoSyncEnabled: next });
-      driveSyncSettingsChanged(true, next);
-    } catch (err) {
-      console.error("Auto-sync toggle save failed:", err);
-      alert("Couldn't save the automatic sync setting — please try again.");
     }
   }
 
@@ -600,19 +610,17 @@ export function SettingsScreen({ onClose, onDataErased }: SettingsScreenProps) {
             <div className="ai-warning" role="alert" aria-live="polite">
               <p className="ai-warning-title"><AlertTriangle size={16} aria-hidden /> Privacy notice</p>
               <p>
-                This stores an <strong>encrypted</strong> copy of your patient data in your own Google
-                Drive. It is encrypted on this device with your passphrase before it is sent, and the
-                passphrase never leaves this device — neither Google nor Slate can read it.
+                Slate keeps an <strong>encrypted</strong> copy of your records in your Google Drive.
+                It's encrypted with your passphrase, so neither Google nor Hypnos can read it.
               </p>
               <p>
-                Google will ask you to let Slate access its own files in your Drive. Slate can only
-                see the one file it creates (<strong>slate-backup.slate</strong>), never the rest of
-                your Drive. Every device you switch sync on merges its records into that file.
+                Google Drive access gives Slate access only to its own files, never to the rest of
+                your data.
               </p>
               <div className="ai-warning-actions">
                 <button className="btn btn-secondary" onClick={() => setShowDriveWarning(false)}>Cancel</button>
-                <button className="btn btn-primary" onClick={() => void enableDrive()}>
-                  <Check size={14} aria-hidden /> I understand, enable
+                <button className="btn btn-primary" onClick={() => void enableDrive()} disabled={driveBusy}>
+                  <Check size={14} aria-hidden /> Continue to Google
                 </button>
               </div>
             </div>
@@ -627,55 +635,20 @@ export function SettingsScreen({ onClose, onDataErased }: SettingsScreenProps) {
 
           {driveEnabled && !showDriveWarning && isDriveConfigured() && (
             <div className="form-section-body">
-              <div className="toggle-row">
-                <span className="toggle-label">
-                  Sync automatically
-                  <span className="toggle-label-sub">When you open Slate, and shortly after each change</span>
-                </span>
-                <button className="toggle-track" role="switch" aria-checked={autoOn}
-                  aria-label="Sync automatically" onClick={() => void handleAutoSyncToggle()}>
-                  <span className="toggle-thumb" />
-                </button>
-              </div>
-
-              <div className="toggle-row" style={{ marginTop: "0.75rem" }}>
-                <span className="toggle-label">
-                  Background sync
-                  <span className="toggle-label-sub">
-                    {backgroundOn
-                      ? "On for this device: syncs without Google's sign-in pop-up"
-                      : "Sync without Google's sign-in pop-up on this device"}
-                  </span>
-                </span>
-                <button className="toggle-track" role="switch" aria-checked={backgroundOn}
-                  aria-label="Background sync" onClick={handleBackgroundToggle} disabled={driveBusy}>
-                  <span className="toggle-thumb" />
-                </button>
-              </div>
-
-              {showBackgroundInfo && !backgroundOn && (
-                <div className="ai-warning" role="alert" aria-live="polite" style={{ marginTop: "0.75rem" }}>
-                  <p className="ai-warning-title"><AlertTriangle size={16} aria-hidden /> Background sync</p>
-                  <p>
-                    Google will ask once more for access to Slate's own files in your Drive. Your
-                    permission is then kept, locked, by the Hypnos sign-in server, so Slate can renew its
-                    access without Google's pop-up. It can only be unlocked with a key that stays on this
-                    device.
-                  </p>
-                  <p>
-                    Your records never pass through the server: they are encrypted on this device with
-                    your passphrase before they reach Google Drive, as now. Turn this off at any time.
-                  </p>
+              {!connected && !finishSetupDismissed && (
+                <div className="ai-warning" role="status" style={{ margin: 0 }}>
+                  <p className="ai-warning-title">Sync without Google's pop-up</p>
+                  <p>Connect this device once more, and Slate won't need Google's sign-in pop-up here again.</p>
                   <div className="ai-warning-actions">
-                    <button className="btn btn-secondary" onClick={() => setShowBackgroundInfo(false)}>Cancel</button>
-                    <button className="btn btn-primary" onClick={() => void startBackgroundSync()} disabled={driveBusy}>
-                      <Check size={14} aria-hidden /> Continue to Google
+                    <button className="btn btn-secondary" onClick={dismissFinishSetup} disabled={driveBusy}>Not now</button>
+                    <button className="btn btn-primary" onClick={() => void finishSetup()} disabled={driveBusy}>
+                      Finish setup
                     </button>
                   </div>
                 </div>
               )}
 
-              <div className="data-action-buttons" style={{ marginTop: "0.75rem" }}>
+              <div className="data-action-buttons" style={{ marginTop: !connected && !finishSetupDismissed ? "0.75rem" : 0 }}>
                 <button className="btn btn-primary data-btn" onClick={() => void runSync()}
                   disabled={driveBusy || syncStatus.state === "syncing"}>
                   <RefreshCw size={14} aria-hidden />
@@ -687,7 +660,6 @@ export function SettingsScreen({ onClose, onDataErased }: SettingsScreenProps) {
                 {syncStatus.state === "wrong-passphrase"
                   ? `Last synced ${formatWhen(lastSyncedAt)}.`
                   : describeStatus(syncStatus, lastSyncedAt)}
-                {!autoOn && " Automatic sync is off — you'll be reminded if it's been over 7 days."}
               </p>
 
               {driveResult && (
@@ -733,6 +705,13 @@ export function SettingsScreen({ onClose, onDataErased }: SettingsScreenProps) {
               <p className={driveResult.ok ? "data-import-ok" : "auth-error"} style={{ margin: 0 }}>
                 {driveResult.message}
               </p>
+              {offerPopup && isDriveConfigured() && (
+                <div className="data-action-buttons" style={{ marginTop: "0.75rem" }}>
+                  <button className="btn btn-secondary data-btn" onClick={() => void enableDriveWithPopup()} disabled={driveBusy}>
+                    Use Google's pop-up instead
+                  </button>
+                </div>
+              )}
             </div>
           )}
 

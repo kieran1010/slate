@@ -273,32 +273,28 @@ function serverToken(): Promise<string | null> {
 }
 
 /**
- * Starts background sync for this device: leaves Slate for Google's consent
- * screen, which returns to Slate (finishBackgroundSyncSetup).
+ * Connects this device to the Hypnos sign-in server: leaves Slate for
+ * Google's consent screen, which returns to Slate (finishBackgroundSyncSetup).
+ * With enableSync, Google Drive sync is switched on once that succeeds.
  */
-export async function beginBackgroundSyncSetup(): Promise<void> {
+export async function beginBackgroundSyncSetup({ enableSync = false } = {}): Promise<void> {
   if (!CLIENT_ID) throw new Error("Google Drive sync isn't set up in this version of Slate.");
-  await startDeviceLink(CLIENT_ID);
+  await startDeviceLink(CLIENT_ID, { enableSync });
 }
 
 /**
  * Call once at startup, before syncing: if Google has just sent the user
- * back, finishes connecting this device. True when that happened (whether
- * or not it worked — Settings shows the outcome).
+ * back, finishes connecting this device. Null when this launch isn't that;
+ * otherwise whether it worked, and whether sync should now be switched on
+ * (Settings shows the message).
  */
-export async function finishBackgroundSyncSetup(): Promise<boolean> {
+export async function finishBackgroundSyncSetup(): Promise<{ ok: boolean; enableSync: boolean } | null> {
   const outcome = await completeDeviceLink();
-  if (!outcome) return false;
+  if (!outcome) return null;
   if (outcome.accessToken) {
     rememberToken(outcome.accessToken, Date.now() + (outcome.expiresIn ?? 3600) * 1000 - 60_000);
   }
-  return true;
-}
-
-/** Turns background sync off for this device: the server forgets its permission. */
-export async function stopBackgroundSync(): Promise<void> {
-  forgetToken();
-  await unlinkDevice();
+  return { ok: outcome.ok, enableSync: outcome.enableSync === true };
 }
 
 /**

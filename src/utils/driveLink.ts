@@ -47,11 +47,15 @@ interface PendingLink {
   deviceKey: string;
   redirectUri: string;
   at: number;
+  // This connection is also switching Google Drive sync on: sync is only
+  // switched on if it succeeds (see App.tsx).
+  enableSync: boolean;
 }
 
 export interface LinkOutcome {
   ok: boolean;
   message: string;
+  enableSync?: boolean;
 }
 
 // ── Storage (every access guarded: storage can be unavailable) ──
@@ -141,13 +145,14 @@ async function callServer(body: Record<string, unknown>): Promise<ServerReply> {
  * Sends this page to Google's consent screen to connect this device.
  * Slate reloads when Google sends the user back (see completeDeviceLink).
  */
-export async function startDeviceLink(clientId: string): Promise<void> {
+export async function startDeviceLink(clientId: string, { enableSync = false } = {}): Promise<void> {
   const pending: PendingLink = {
     state: randomB64url(16),
     codeVerifier: randomB64url(32),
     deviceKey: randomB64url(32),
     redirectUri: `${location.origin}/`,
     at: Date.now(),
+    enableSync,
   };
   writeJson(PENDING_KEY, pending);
   const params = new URLSearchParams({
@@ -184,19 +189,19 @@ export async function completeDeviceLink(): Promise<(LinkOutcome & { accessToken
   history.replaceState(history.state, "", location.pathname);
   const pending = readJson<PendingLink>(PENDING_KEY);
   if (!pending || pending.state !== state) {
-    return keepForSettings({ ok: false, message: "Background sync wasn't set up: the sign-in didn't match. Please try again." });
+    return keepForSettings({ ok: false, message: "Sync wasn't set up: the sign-in didn't match. Please try again." });
   }
   writeJson(PENDING_KEY, null);
 
   let outcome: LinkOutcome & { accessToken?: string; expiresIn?: number };
   if (Date.now() - pending.at > PENDING_MAX_AGE_MS) {
-    outcome = { ok: false, message: "That took too long. Please try setting up background sync again." };
+    outcome = { ok: false, message: "That took too long. Please try again." };
   } else if (error || !code) {
     outcome = {
       ok: false,
       message: error === "access_denied"
-        ? "Background sync wasn't set up: Google Drive access wasn't allowed."
-        : "Background sync wasn't set up. Please try again.",
+        ? "Google Drive access wasn't allowed, so sync wasn't set up."
+        : "Sync wasn't set up. Please try again.",
     };
   } else {
     try {
@@ -211,25 +216,28 @@ export async function completeDeviceLink(): Promise<(LinkOutcome & { accessToken
         setDeviceLink({ deviceId: reply.data.deviceId, deviceKey: pending.deviceKey });
         outcome = {
           ok: true,
-          message: "Background sync is on for this device. Google's sign-in window won't be needed here again.",
+          message: pending.enableSync
+            ? "Google Drive sync is on."
+            : "Done: this device now syncs without Google's sign-in pop-up.",
           accessToken: typeof reply.data.accessToken === "string" ? reply.data.accessToken : undefined,
           expiresIn: Number(reply.data.expiresIn) || undefined,
         };
       } else {
         const why = typeof reply.data.error === "string" ? reply.data.error : "Please try again.";
-        outcome = { ok: false, message: `Background sync wasn't set up. ${why}` };
+        outcome = { ok: false, message: `Sync wasn't set up. ${why}` };
       }
     } catch {
-      outcome = { ok: false, message: "Background sync wasn't set up: couldn't reach the Hypnos server. Please try again." };
+      outcome = { ok: false, message: "Sync wasn't set up: couldn't reach the Hypnos server. Please try again." };
     }
   }
+  outcome.enableSync = pending.enableSync === true;
   return keepForSettings(outcome);
 }
 
 // Keeps the outcome's message for Settings to show once.
 function keepForSettings<T extends LinkOutcome>(outcome: T): T {
   try {
-    sessionStorage.setItem(OUTCOME_KEY, JSON.stringify({ ok: outcome.ok, message: outcome.message }));
+    sessionStorage.setItem(OUTCOME_KEY, JSON.stringify({ ok: outcome.ok, message: outcome.message, enableSync: outcome.enableSync }));
   } catch {
     // Settings just won't show the message.
   }

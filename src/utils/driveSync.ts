@@ -13,7 +13,7 @@
 //   file's version will have moved on, so it re-reads and merges again
 //   rather than overwrite that device's changes.
 //
-// AUTOMATIC (when "Sync automatically" is on):
+// AUTOMATIC (always, while sync is on):
 //   • on opening Slate (a couple of seconds after launch), and when it
 //     returns to the foreground after a while;
 //   • shortly after each change to patients, records or settings;
@@ -37,7 +37,7 @@
 //   wait, and sync then.
 //
 //   BACKGROUND SYNC: once a device is connected to the Hypnos sign-in
-//   server (Settings → Background sync; utils/driveLink.ts), its tokens
+//   server (done when Drive sync is switched on; utils/driveLink.ts), its tokens
 //   come from the server instead, with no window and no tap, so all of
 //   the above is only the fallback for when the server can't help.
 //
@@ -278,8 +278,10 @@ let lastAttemptAt = 0;
 // within the tap and can't wait for the database first.
 let autoOn = false;
 
-function autoFromConfig(c: { driveBackupEnabled: boolean; driveAutoSyncEnabled: boolean; encryptionPassphrase: string }): boolean {
-  return c.driveBackupEnabled && c.driveAutoSyncEnabled && !!c.encryptionPassphrase.trim();
+// Sync is always automatic while it's on (there's no longer a switch for
+// it); config.driveAutoSyncEnabled is ignored.
+function autoFromConfig(c: { driveBackupEnabled: boolean; encryptionPassphrase: string }): boolean {
+  return c.driveBackupEnabled && !!c.encryptionPassphrase.trim();
 }
 
 async function autoSyncAllowed(): Promise<boolean> {
@@ -391,15 +393,12 @@ export function startDriveSync(): void {
   schedule(LAUNCH_DELAY_MS);
 }
 
-/** Call when sync or its automatic option is switched on or off. */
-export function driveSyncSettingsChanged(enabled: boolean, auto: boolean): void {
+/** Call when sync is switched on or off. */
+export function driveSyncSettingsChanged(enabled: boolean): void {
   if (timer) { clearTimeout(timer); timer = null; }
-  autoOn = enabled && auto;
+  autoOn = enabled;
   if (!enabled) { dirty = false; setStatus({ state: "off" }); return; }
   if (status.state === "off") setStatus({ state: "idle" });
-  // Switching automatic sync back on catches up on anything edited
-  // while it was off.
-  if (auto) schedule(0);
 }
 
 /** Call after this device's data has been erased. */
