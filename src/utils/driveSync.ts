@@ -32,8 +32,14 @@
 //   sync" button (components/Brand.tsx): that tap, or Sync now in
 //   Settings, gets a new token and syncs. Taps that save a change
 //   (Save, Archive, Delete, Restore) also renew an expired token on the
-//   way (renewDriveAccessOnTap), so the button is rarely needed. Failed syncs (state "error")
-//   show the same button. Changes made meanwhile wait, and sync then.
+//   way (renewDriveAccessOnTap), so the button is rarely needed. Failed
+//   syncs (state "error") show the same button. Changes made meanwhile
+//   wait, and sync then.
+//
+//   BACKGROUND SYNC: once a device is connected to the Hypnos sign-in
+//   server (Settings → Background sync; utils/driveLink.ts), its tokens
+//   come from the server instead, with no window and no tap, so all of
+//   the above is only the fallback for when the server can't help.
 //
 // PASSPHRASE:
 //   The Drive copy is encrypted with the passphrase saved on this

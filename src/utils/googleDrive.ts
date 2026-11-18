@@ -12,6 +12,12 @@
 //   refreshed silently (prompt: "none"), as Tribulator does, so
 //   automatic syncs don't need the user to sign in again.
 //
+// BACKGROUND SYNC (utils/driveLink.ts):
+//   A device connected to the Hypnos sign-in server gets its tokens
+//   from the server instead, with no Google window at all; the
+//   methods above are then only the fallback for when the server
+//   can't help.
+//
 // CLIENT ID:
 //   Built in at build time from the VITE_GOOGLE_CLIENT_ID GitHub
 //   Actions variable: the Hypnos Medical OAuth client, shared
@@ -34,11 +40,13 @@
 //   hour (Android often closes a PWA in the background) can sync
 //   straight away without asking Google again. It can only reach the
 //   files Slate created (drive.file). Forgotten when Google rejects
-//   it, and revoked on disconnect / erase.
+//   it, and on disconnect / erase (never revoked: see disconnectDrive).
 //
 // FILE LOCATION:
 //   src/utils/googleDrive.ts
 // ============================================================
+
+import { getDeviceLink, fetchServerToken, startDeviceLink, completeDeviceLink, unlinkDevice } from "./driveLink";
 
 const GIS_SRC = "https://accounts.google.com/gsi/client";
 const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
@@ -76,7 +84,6 @@ interface GoogleOAuth2 {
     callback: (response: TokenResponse) => void;
     error_callback?: (error: { type?: string; message?: string }) => void;
   }): TokenClient;
-  revoke(token: string, done: () => void): void;
 }
 
 interface GoogleGlobal {
@@ -193,6 +200,14 @@ export async function getDriveToken({ interactive = true, timeoutMs }: TokenOpti
   if (!CLIENT_ID) throw new Error("Google Drive sync isn't set up in this version of Slate.");
   if (cachedToken && Date.now() < cachedExpiry) return cachedToken;
 
+  // Background sync: a connected device asks the Hypnos server — no window.
+  // If it's no longer connected, or the server can't help right now, carry
+  // on the usual way below.
+  if (getDeviceLink()) {
+    const fromServer = await serverToken();
+    if (fromServer) return fromServer;
+  }
+
   const attempt = (async () => {
     const oauth2 = await loadGis();
     return new Promise<string>((resolve, reject) => {
@@ -240,17 +255,67 @@ export async function getDriveToken({ interactive = true, timeoutMs }: TokenOpti
   }
 }
 
-/** Revokes the Drive grant for this session. Best effort. */
-export async function revokeDriveToken(): Promise<void> {
-  const token = cachedToken;
-  forgetToken();
-  if (!token) return;
-  try {
-    const oauth2 = await loadGis();
-    await new Promise<void>((resolve) => oauth2.revoke(token, resolve));
-  } catch {
-    // The token expires within the hour regardless.
+// Concurrent callers (a background sync and a tap, say) share one request:
+// the server allows a device one token request every few seconds.
+let serverAttempt: Promise<string | null> | null = null;
+
+function serverToken(): Promise<string | null> {
+  if (!serverAttempt) {
+    serverAttempt = fetchServerToken()
+      .then((result) => {
+        if (result.kind !== "token") return null;
+        rememberToken(result.accessToken, Date.now() + result.expiresIn * 1000 - 60_000);
+        return result.accessToken;
+      })
+      .finally(() => { serverAttempt = null; });
   }
+  return serverAttempt;
+}
+
+/**
+ * Starts background sync for this device: leaves Slate for Google's consent
+ * screen, which returns to Slate (finishBackgroundSyncSetup).
+ */
+export async function beginBackgroundSyncSetup(): Promise<void> {
+  if (!CLIENT_ID) throw new Error("Google Drive sync isn't set up in this version of Slate.");
+  await startDeviceLink(CLIENT_ID);
+}
+
+/**
+ * Call once at startup, before syncing: if Google has just sent the user
+ * back, finishes connecting this device. True when that happened (whether
+ * or not it worked — Settings shows the outcome).
+ */
+export async function finishBackgroundSyncSetup(): Promise<boolean> {
+  const outcome = await completeDeviceLink();
+  if (!outcome) return false;
+  if (outcome.accessToken) {
+    rememberToken(outcome.accessToken, Date.now() + (outcome.expiresIn ?? 3600) * 1000 - 60_000);
+  }
+  return true;
+}
+
+/** Turns background sync off for this device: the server forgets its permission. */
+export async function stopBackgroundSync(): Promise<void> {
+  forgetToken();
+  await unlinkDevice();
+}
+
+/**
+ * Disconnects this device from Google Drive: forgets its token and its
+ * background-sync connection. Best effort.
+ *
+ * It deliberately does NOT revoke anything with Google. Revoking any one
+ * token removes everything granted to the whole Google project — every
+ * token, on every device, for every Hypnos app sharing the project (Google,
+ * "OAuth 2.0 for web server apps", token revocation). A forgotten token
+ * expires within the hour; a forgotten background-sync permission can't be
+ * used again (only this device's key could unlock it). To withdraw access
+ * everywhere, the user removes Hypnos from their Google Account.
+ */
+export async function disconnectDrive(): Promise<void> {
+  forgetToken();
+  await unlinkDevice();
 }
 
 // ── Drive REST ────────────────────────────────────────────────
