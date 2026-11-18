@@ -1,7 +1,7 @@
 // =============================================================================
 // google-drive-auth — the Hypnos suite's sign-in server for Google Drive sync.
 // -----------------------------------------------------------------------------
-// Lets a Hypnos app (Slate first) get a fresh Google Drive access token
+// Lets a Hypnos app (Slate, Tribulator) get a fresh Google Drive access token
 // whenever it needs one, without Google's sign-in window. Each device connects
 // once; after that it asks this server instead of Google.
 //
@@ -64,6 +64,10 @@ const APPS: Record<string, { origins: string[]; redirectUris: string[] }> = {
   slate: {
     origins: ["https://slate.hypnos.one"],
     redirectUris: ["https://slate.hypnos.one/"],
+  },
+  tribulator: {
+    origins: ["https://tribulator.hypnos.one"],
+    redirectUris: ["https://tribulator.hypnos.one/"],
   },
 };
 
