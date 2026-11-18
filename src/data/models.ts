@@ -311,9 +311,9 @@ export interface AppConfig {
   // Per-device, not carried in backups. Drives the "not synced for 7
   // days" prompt (components/DriveStalePrompt.tsx).
   driveLastSyncedAt: number;
-  // Whether Drive syncs automatically — on opening Slate and shortly
-  // after each change (utils/driveSync.ts). Only meaningful while
-  // driveBackupEnabled; off means manual Sync now.
+  // No longer used: sync is always automatic while it's on (Settings
+  // has no switch for it since background sync). Kept so stored configs
+  // keep their shape.
   driveAutoSyncEnabled: boolean;
   // When each synced setting (BACKUP_SETTINGS_FIELDS) was last changed
   // on any device (UTC ISO), so Drive sync can keep the latest of each.

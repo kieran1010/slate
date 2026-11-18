@@ -35,7 +35,7 @@ import { ImportScreen } from "./screens/ImportScreen";
 import { SettingsScreen } from "./screens/SettingsScreen";
 import { useLiveQuery } from "dexie-react-hooks";
 import { ensureActiveProfile } from "./data/profiles";
-import { getConfig } from "./data/repository";
+import { getConfig, saveConfig } from "./data/repository";
 import { DriveStalePrompt } from "./components/DriveStalePrompt";
 import { startDriveSync, resetDriveSync } from "./utils/driveSync";
 import { finishBackgroundSyncSetup } from "./utils/googleDrive";
@@ -243,19 +243,23 @@ export default function App() {
     window.history.pushState({ slateNav: true, settings: true }, "");
   }, []);
 
-  // ── Startup: profile, background-sync setup, Drive sync ────
-  // A launch can be Google returning from background-sync setup: finish
-  // that first, so the launch sync already uses the new connection, and
-  // open Settings to show how it went. (openSettings is stable, so this
-  // runs once.)
+  // ── Startup: profile, Drive connection, Drive sync ─────────
+  // A launch can be Google returning from connecting this device (Settings
+  // sent the user there): finish that first, so the launch sync already
+  // uses the new connection. If it was switching Google Drive sync on, sync
+  // is switched on only now, once connecting has worked. Settings then opens
+  // to show how it went. (openSettings is stable, so this runs once.)
   useEffect(() => {
-    const setupDone = finishBackgroundSyncSetup().catch(() => false);
+    const setupDone = finishBackgroundSyncSetup().catch(() => null);
     ensureActiveProfile()
       .then(async (p) => {
-        const returnedFromGoogle = await setupDone;
+        const setup = await setupDone;
+        if (setup?.ok && setup.enableSync) {
+          await saveConfig({ driveBackupEnabled: true, driveAutoSyncEnabled: true });
+        }
         startDriveSync();
         setProfile(p);
-        if (returnedFromGoogle) openSettings();
+        if (setup) openSettings();
       })
       .catch(console.error);
   }, [openSettings]);
