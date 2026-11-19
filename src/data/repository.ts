@@ -221,6 +221,33 @@ export async function upsertPatient(input: Patient): Promise<void> {
   });
 }
 
+// For AI import: fill in only the identity fields Slate doesn't have
+// yet. A stored name or DOB is never overwritten by what a document was
+// read as (a misread photo, or a misread NHI pointing at someone else);
+// the import screens show any difference to the user instead.
+export async function fillPatientBlanks(input: Patient): Promise<void> {
+  const existing = await getPatient(input.nhi);
+  if (!existing) {
+    await upsertPatient(input);
+    return;
+  }
+  const pick = (stored: string, read: string) => (stored.trim() ? stored : read);
+  const merged: Patient = {
+    nhi: existing.nhi,
+    surname: pick(existing.surname, input.surname),
+    givenName: pick(existing.givenName, input.givenName),
+    dob: pick(existing.dob, input.dob),
+  };
+  if (
+    merged.surname === existing.surname &&
+    merged.givenName === existing.givenName &&
+    merged.dob === existing.dob
+  ) {
+    return;
+  }
+  await upsertPatient(merged);
+}
+
 // ============================================================
 // ACTIVE LISTS (archived = 0, sorted for display)
 // ============================================================
@@ -244,6 +271,35 @@ export async function listActiveFollowUp(): Promise<StoredFollowUp[]> {
   if (!pid) return [];
   const rows = await db.followUp.where("[profileId+archived]").equals([pid, 0]).toArray();
   return sortFollowUp(rows);
+}
+
+// ── Active records for one patient ───────────────────────────
+// Used by AI import to find a record the imported document could be
+// added to. Most recently updated first.
+
+function byUpdatedDesc<T extends { updatedAt: string }>(rows: T[]): T[] {
+  return [...rows].sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0));
+}
+
+export async function listActiveAcuteForNhi(nhi: string): Promise<StoredAcute[]> {
+  const pid = await getActiveProfileId();
+  if (!pid || !nhi) return [];
+  const rows = await db.acute.where("[profileId+nhi]").equals([pid, nhi]).toArray();
+  return byUpdatedDesc(rows.filter((r) => r.archived === 0));
+}
+
+export async function listActivePreAssessForNhi(nhi: string): Promise<StoredPreAssess[]> {
+  const pid = await getActiveProfileId();
+  if (!pid || !nhi) return [];
+  const rows = await db.preAssess.where("[profileId+nhi]").equals([pid, nhi]).toArray();
+  return byUpdatedDesc(rows.filter((r) => r.archived === 0));
+}
+
+export async function listActiveFollowUpForNhi(nhi: string): Promise<StoredFollowUp[]> {
+  const pid = await getActiveProfileId();
+  if (!pid || !nhi) return [];
+  const rows = await db.followUp.where("[profileId+nhi]").equals([pid, nhi]).toArray();
+  return byUpdatedDesc(rows.filter((r) => r.archived === 0));
 }
 
 // ============================================================
