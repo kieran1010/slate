@@ -8,11 +8,18 @@
 // An operating list (several patients, possibly several pages sent in
 // one request) uses callOperatingListApi with its own prompt.
 //
-// DIRECT BROWSER ACCESS: the Anthropic API requires two extra
-// headers when called from a browser (not a server):
+// DIRECT BROWSER ACCESS: the Anthropic API needs an extra header
+// when called from a browser (not a server):
 //   • anthropic-dangerous-direct-browser-access: true  → enables CORS
-//   • anthropic-beta: pdfs-2024-09-25                  → PDF documents
-// These are opt-in on Anthropic's side so are deliberately verbose.
+// This is opt-in on Anthropic's side so is deliberately verbose.
+// (PDF documents need no beta header any more.)
+//
+// MODEL: Claude Sonnet 5.5. It thinks before answering by default
+// (it can't be switched off as on Sonnet 4.6); effort "low" keeps that
+// short, closest to the old no-thinking behaviour. Thinking counts
+// toward max_tokens, so the limits leave room for it. The reply can
+// start with a (blank) thinking block, so the JSON is read from the
+// text block by type, not position.
 //
 // UNCERTAIN VALUES: the system prompt instructs the model to
 // prefix uncertain values with "[UNCERTAIN] ". These are stored
@@ -231,7 +238,8 @@ export function fileToBase64(file: File): Promise<string> {
 // ── Anthropic API call ────────────────────────────────────────
 
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
-const MODEL = "claude-sonnet-4-6";
+const MODEL = "claude-sonnet-5-5";
+const EFFORT = "low";
 
 /** One page sent to the model: a photo or a PDF, already base64-encoded. */
 export interface ImportDoc {
@@ -258,6 +266,7 @@ async function callJsonApi(
   const body = {
     model: MODEL,
     max_tokens: maxTokens,
+    output_config: { effort: EFFORT },
     system: systemPrompt,
     messages: [
       {
@@ -275,8 +284,6 @@ async function callJsonApi(
       "x-api-key": apiKey,
       "anthropic-version": "2023-06-01",
       "anthropic-dangerous-direct-browser-access": "true",
-      // Required for PDF document support.
-      "anthropic-beta": "pdfs-2024-09-25",
     },
     body: JSON.stringify(body),
   });
@@ -332,7 +339,7 @@ export async function callImportApi(
     systemPrompt,
     [{ base64: base64Data, mediaType }],
     "Please extract the clinical information from this document.",
-    2000
+    8000
   );
   if (!result || typeof result !== "object" || Array.isArray(result)) {
     throw new Error(

@@ -967,7 +967,9 @@ body {
 .import-row-nhi { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .import-row-nhi label { font-size: 0.78rem; color: var(--muted); }
 .import-row-nhi .form-input,
-.import-row-target .form-select {
+.import-row-target .form-select,
+.import-row-dos .form-input,
+.import-list-when .form-input {
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 6px 10px;
@@ -977,6 +979,11 @@ body {
 .import-row-proc { font-size: 0.86rem; color: var(--teal); line-height: 1.4; overflow-wrap: anywhere; }
 .import-row-meta { font-size: 0.8rem; color: var(--muted); line-height: 1.45; }
 .import-row-target { display: flex; flex-direction: column; gap: 4px; }
+.import-row-dos { display: flex; flex-direction: column; gap: 4px; }
+.import-row-dos label { font-size: 0.78rem; color: var(--muted); }
+.import-list-when { display: flex; gap: 10px; flex-wrap: wrap; }
+.import-list-when > div { display: flex; flex-direction: column; gap: 4px; flex: 1 1 140px; }
+.import-list-when label { font-size: 0.78rem; color: var(--muted); }
 .import-row-target label { font-size: 0.78rem; color: var(--muted); }
 
 .import-summary { margin: 0; padding-left: 20px; font-size: 0.86rem; color: var(--text); line-height: 1.7; }

@@ -12,9 +12,10 @@
 //              model sees the whole list (a header on page 1 can carry
 //              the date and surgeon for every page)
 //   review   → a checklist of every patient read. Each row can be
-//              unticked, its NHI corrected, and — when the patient
-//              already has an active pre-assessment — set to "add to
-//              existing" (the default) or "create new"
+//              unticked, its NHI and date/time of surgery corrected,
+//              and — when the patient already has an active
+//              pre-assessment — set to "add to existing" (the
+//              default) or "create new"
 //   saving   → records created / added to, one row at a time
 //   done     → a summary, then back to the pre-assessment list
 //   error    → message, with "Try again" back to the pages
@@ -28,6 +29,16 @@
 //   • the list marks the case as cancelled.
 // The stored name/DOB is never overwritten (fillPatientBlanks), and
 // adding to a record never removes anything (utils/importMerge.ts).
+//
+// DATE AND TIME OF SURGERY: the review has a "List date" and a "Start
+// time" (prefilled from the dates/times read: the most common date, the
+// earliest time; start time 08:00 if the list shows none). A patient
+// whose date wasn't read gets the list date; one whose time wasn't read
+// gets the start time, so untimed patients share it and keep list
+// order. A date or time the list did show is kept, and so is a value
+// read as [UNCERTAIN] (left for the clinician to check). Each row also
+// has its own date/time field; once edited, that row no longer follows
+// the list date and start time.
 //
 // FILE LOCATION:
 //   src/screens/OperatingListImport.tsx
@@ -56,6 +67,7 @@ import { todayIsoDate } from "../data/dates";
 import { capitalCase, formatDateTime, formatDateDMY } from "../utils/format";
 import type { NavigateFn } from "../types/nav";
 import { Spinner, ImportError } from "../components/ImportStatus";
+import { DateTimeField } from "../components/DateTimeField";
 
 // ── Limits ────────────────────────────────────────────────────
 // The API takes up to 32 MB per request, and base64 adds a third,
@@ -90,6 +102,8 @@ interface Row {
   cancelled: boolean;
   include: boolean;
   target: number | "new";      // record id to add to, or a new record
+  dos: string;                 // date/time of surgery typed on this row
+  dosManual: boolean;          // true once `dos` was edited here
   lookedUpFor: string | null;  // the NHI `matches`/`patient` belong to
   matches: StoredPreAssess[];
   patient: Patient | undefined;
@@ -158,9 +172,48 @@ function applyLookup(row: Row, nhi: string, res: Lookup): Row {
   };
 }
 
+// Date and time read from the list, when they are a plain date or
+// date+time (not [UNCERTAIN], not some other text).
+const READ_DATE = /^(\d{4}-\d{2}-\d{2})(?:T(\d{2}:\d{2}))?$/;
+
+/**
+ * The date/time of surgery a row will be saved with (see DATE AND TIME
+ * OF SURGERY at the top of this file).
+ */
+function effectiveDos(row: Row, listDate: string, startTime: string): string {
+  if (row.dosManual) return row.dos;
+  const read = row.read.dateOfSurgery ?? "";
+  const m = read.match(READ_DATE);
+  if (read && !m) return read; // [UNCERTAIN] or unparsed: keep as read
+  const date = m ? m[1] : listDate;
+  if (!date) return "";
+  const time = m?.[2] ?? startTime;
+  return time ? `${date}T${time}` : date;
+}
+
+// Prefills for the list date (the most common date read) and the start
+// time (the earliest time read, else 08:00).
+function listDefaults(rows: Row[]): { listDate: string; startTime: string } {
+  const counts = new Map<string, number>();
+  const times: string[] = [];
+  for (const r of rows) {
+    const m = (r.read.dateOfSurgery ?? "").match(READ_DATE);
+    if (!m) continue;
+    counts.set(m[1], (counts.get(m[1]) ?? 0) + 1);
+    if (m[2]) times.push(m[2]);
+  }
+  let listDate = "";
+  let best = 0;
+  for (const [date, n] of counts) {
+    if (n > best) { listDate = date; best = n; }
+  }
+  times.sort();
+  return { listDate, startTime: times[0] ?? "08:00" };
+}
+
 // The pre-assessment fields an operating list provides. A case the
 // user imports although the list marks it cancelled says so in Notes.
-function listFields(row: Row): ReadFields {
+function listFields(row: Row, dateOfSurgery: string): ReadFields {
   const r = row.read;
   const notes = [r.notes ?? "", row.cancelled ? "Marked as cancelled on the operating list" : ""]
     .filter(Boolean)
@@ -168,7 +221,7 @@ function listFields(row: Row): ReadFields {
   return {
     procedure: r.procedure ?? "",
     surgeon: r.surgeon ?? "",
-    dateOfSurgery: r.dateOfSurgery ?? "",
+    dateOfSurgery,
     indicationForSurgery: r.indicationForSurgery ?? "",
     allergies: r.allergies ?? "",
     notes,
@@ -199,6 +252,8 @@ export function OperatingListImport({ apiKey, navigate, onBusyChange }: Props) {
   const [rows, setRows] = useState<Row[]>([]);
   const [progress, setProgress] = useState("");
   const [outcome, setOutcome] = useState<Outcome | null>(null);
+  const [listDate, setListDate] = useState("");
+  const [startTime, setStartTime] = useState("");
 
   function setStage(s: Stage) {
     setStageRaw(s);
@@ -272,6 +327,8 @@ export function OperatingListImport({ apiKey, navigate, onBusyChange }: Props) {
           cancelled,
           include: !!nhi && !nhiUncertain && !cancelled,
           target: "new",
+          dos: "",
+          dosManual: false,
           lookedUpFor: null,
           matches: [],
           patient: undefined,
@@ -281,6 +338,9 @@ export function OperatingListImport({ apiKey, navigate, onBusyChange }: Props) {
       const looked = await Promise.all(
         initial.map(async (r) => applyLookup(r, r.nhi, await lookup(r.nhi, r.read)))
       );
+      const defaults = listDefaults(looked);
+      setListDate(defaults.listDate);
+      setStartTime(defaults.startTime);
       setRows(looked);
       setStage("review");
     } catch (err) {
@@ -357,7 +417,7 @@ export function OperatingListImport({ apiKey, navigate, onBusyChange }: Props) {
           await fillPatientBlanks({ nhi: row.nhi, surname, givenName, dob });
         }
 
-        const fields = listFields(row);
+        const fields = listFields(row, effectiveDos(row, listDate, startTime));
         if (row.target === "new") {
           await createPreAssess({
             nhi: row.nhi,
@@ -472,6 +532,32 @@ export function OperatingListImport({ apiKey, navigate, onBusyChange }: Props) {
             Check each patient against the list. Untick any you don't want to import, and
             correct an NHI if it was misread.
           </p>
+          <div className="import-list-when">
+            <div>
+              <label htmlFor="oplist-date">List date</label>
+              <input
+                id="oplist-date"
+                type="date"
+                className="form-input"
+                value={listDate}
+                onChange={(e) => setListDate(e.target.value)}
+              />
+            </div>
+            <div>
+              <label htmlFor="oplist-start">Start time</label>
+              <input
+                id="oplist-start"
+                type="time"
+                className="form-input"
+                value={startTime}
+                onChange={(e) => setStartTime(e.target.value)}
+              />
+            </div>
+          </div>
+          <p className="import-card-note">
+            Patients with no date on the list get the list date. Patients with no time get the
+            start time. Change any patient's date or time on their row.
+          </p>
           <div style={{ display: "flex", gap: 8 }}>
             <button className="btn-import" onClick={() => setAll(true)}>Tick all</button>
             <button className="btn-import" onClick={() => setAll(false)}>Untick all</button>
@@ -483,7 +569,7 @@ export function OperatingListImport({ apiKey, navigate, onBusyChange }: Props) {
             const r = row.read;
             const name = rowName(r);
             const nameUncertain = hasUncertainTag(r.surname) || hasUncertainTag(r.givenName);
-            const otherUncertain = ["procedure", "surgeon", "dateOfSurgery", "dob", "indicationForSurgery", "allergies", "notes"]
+            const otherUncertain = ["procedure", "surgeon", "dob", "indicationForSurgery", "allergies", "notes"]
               .some((k) => hasUncertainTag(r[k]));
             const checkboxId = `oplist-row-${row.key}`;
             const nhiId = `oplist-nhi-${row.key}`;
@@ -534,15 +620,15 @@ export function OperatingListImport({ apiKey, navigate, onBusyChange }: Props) {
                 </div>
 
                 {r.procedure && <p className="import-row-proc"><Val v={r.procedure} /></p>}
-                {(r.dateOfSurgery || r.surgeon) && (
-                  <p className="import-row-meta">
-                    {r.dateOfSurgery && (
-                      <Val v={hasUncertainTag(r.dateOfSurgery) ? r.dateOfSurgery : formatDateTime(r.dateOfSurgery)} />
-                    )}
-                    {r.dateOfSurgery && r.surgeon && " · "}
-                    {r.surgeon && <Val v={r.surgeon} />}
-                  </p>
-                )}
+                {r.surgeon && <p className="import-row-meta"><Val v={r.surgeon} /></p>}
+                <div className="import-row-dos">
+                  <label htmlFor={`oplist-dos-${row.key}`}>Date &amp; time of surgery</label>
+                  <DateTimeField
+                    id={`oplist-dos-${row.key}`}
+                    value={effectiveDos(row, listDate, startTime)}
+                    onChange={(v) => updateRow(row.key, (x) => ({ ...x, dos: v, dosManual: true }))}
+                  />
+                </div>
                 {otherUncertain && (
                   <p className="import-row-meta">
                     <span className="import-uncertain">(?)</span> Some details were hard to read. They
